@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/purpleshellsecurity/SentinelHealthCheck/security/advisories/new
+    about: Report injection, credential handling, or query-injection issues privately - not as public issues.
