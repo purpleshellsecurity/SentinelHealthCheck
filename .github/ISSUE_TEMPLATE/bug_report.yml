@@ -1,0 +1,37 @@
+name: Bug report
+description: Something is wrong - a crash, a false finding, a broken report
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Before pasting anything:** redact tenant data - subscription IDs, workspace
+        names/GUIDs, rule names you consider sensitive. The maintainers do not need them.
+  - type: input
+    id: version
+    attributes:
+      label: Module version
+      description: From the report footer or `(Import-PowerShellDataFile ./SentinelHealthCheck.psd1).ModuleVersion`
+      placeholder: "0.3.0-beta"
+    validations:
+      required: true
+  - type: input
+    id: psversion
+    attributes:
+      label: PowerShell version
+      placeholder: "7.4.6"
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: Include the console output or the relevant report section (redacted).
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true

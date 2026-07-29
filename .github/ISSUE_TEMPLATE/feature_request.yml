@@ -1,0 +1,26 @@
+name: Feature request
+description: A new check, output mode, or improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What can't you see or do today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Evidence (required for new checks)
+      description: >
+        New checks need a source - a Microsoft doc or a named framework that backs
+        the claim. Link it here.
+    validations:
+      required: false

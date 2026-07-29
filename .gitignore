@@ -1,0 +1,16 @@
+# Evidence and output — never commit client data or generated reports
+evidence/
+*.html
+*.report.json
+SentinelHealthCheck-*.html
+
+# PowerShell / test artifacts
+testResults*.xml
+coverage*.xml
+*.tmp
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
