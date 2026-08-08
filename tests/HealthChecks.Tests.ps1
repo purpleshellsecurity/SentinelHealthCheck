@@ -479,7 +479,7 @@ Describe 'Test-ShcDisabledRules (HC-05)' {
 }
 
 Describe 'New-ShcReport rendering' {
-    It 'HTML-encodes untrusted rule names' {
+    It 'neutralizes untrusted rule names in the embedded JSON (no script breakout)' {
         $check = New-ShcCheckResult -CheckId 'HC-04' -Title 'T' -Weight 15 -Score 10 -Status 'critical' -Headline 'h' `
             -Findings @([pscustomobject]@{ RuleName = '<script>alert(1)</script>'; Severity = 'High'; Kind = 'Scheduled'; LastModifiedUtc = '' }) `
             -Columns @('RuleName', 'Severity', 'Kind', 'LastModifiedUtc')
@@ -491,10 +491,12 @@ Describe 'New-ShcReport rendering' {
         $path = Join-Path $TestDrive 'r.html'
         New-ShcReport -Result $result -Path $path
         $html = Get-Content $path -Raw
+        # The raw payload must never appear as live markup...
         $html | Should -Not -Match '<script>alert'
-        $html.Contains('&lt;script&gt;alert(1)&lt;/script&gt;') | Should -BeTrue
+        # ...it is embedded unicode-escaped inside the JSON data island instead.
+        $html | Should -Match '\\u003cscript\\u003ealert'
     }
-    It 'renders the noisiest leaderboard alongside a failing alert-noise card (they rank different things)' {
+    It 'embeds both leaderboards in the report payload when provided' {
         $noiseCard = New-ShcCheckResult -CheckId 'HC-03' -Title 'Alert noise and triage discipline' -Weight 15 `
             -Score 30 -Status 'serious' -Headline 'h' `
             -Findings @([pscustomobject]@{ RuleOrIncidentTitle = 'Noisy'; Incidents = [long]50; FalsePositivePct = '80%' }) `
@@ -511,8 +513,8 @@ Describe 'New-ShcReport rendering' {
         $path = Join-Path $TestDrive 'r2.html'
         New-ShcReport -Result $result -Path $path
         $html = Get-Content $path -Raw
-        $html | Should -Match 'Noisiest - most incidents'
-        $html | Should -Match 'Quietest - fewest alerts'
+        $html | Should -Match '"RuleOrIncidentTitle":"Noisy"'
+        $html | Should -Match '"RuleName":"Quiet"'
     }
     It 'suppresses the noisiest leaderboard when every row is a single incident (ties rank nothing)' {
         $result = [pscustomobject]@{
@@ -530,7 +532,8 @@ Describe 'New-ShcReport rendering' {
         $path = Join-Path $TestDrive 'r3.html'
         New-ShcReport -Result $result -Path $path
         $html = Get-Content $path -Raw
-        $html | Should -Not -Match 'Noisiest - most incidents'
+        $html | Should -Match '"noisiest":\[\]'
+        $html | Should -Not -Match '"RuleOrIncidentTitle":"A"'
     }
 }
 

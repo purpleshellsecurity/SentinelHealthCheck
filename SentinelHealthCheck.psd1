@@ -1,6 +1,6 @@
 @{
     RootModule        = 'SentinelHealthCheck.psm1'
-    ModuleVersion     = '0.3.0'
+    ModuleVersion     = '0.3.1'
     GUID              = '7c1f4a2e-9b3d-4e8a-a1c6-2f5d8e7b9c01'
     Author            = 'Purpleshell Security'
     CompanyName       = 'Purpleshell Security'

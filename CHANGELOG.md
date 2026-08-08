@@ -2,6 +2,20 @@
 
 All notable changes to this module. Format loosely follows Keep a Changelog.
 
+## [0.3.1-beta] - 2026-08-08
+
+### Changed
+- Redesigned the HTML report as an interactive dashboard: a radial score gauge
+  with the grade at its center, a per-check score bar chart (worst-first; click a
+  bar to jump to that check), a "never-fired rules by severity" donut, and live
+  search plus column-sort on every findings table. Added a light/dark theme
+  toggle, with both themes designed. The report is still a single,
+  self-contained, offline file with no external dependencies.
+- The renderer now embeds the scan result as an HTML-safe JSON island and builds
+  the page client-side, replacing the server-side HTML-table building. Untrusted
+  strings (rule names, incident titles) are unicode-escaped so nothing can break
+  out of the data block, and every value is written to the DOM as text.
+
 ## [0.3.0-beta] - 2026-07-29
 
 First public beta. Feedback and bug reports welcome — please open an issue.
