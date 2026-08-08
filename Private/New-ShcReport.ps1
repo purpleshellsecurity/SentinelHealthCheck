@@ -115,8 +115,8 @@ function New-ShcReport {
             if (-not $bySev.Contains($s)) { $bySev[$s] = 0 }
             $bySev[$s]++
         }
-        $ranked = @($order | Where-Object { $bySev.Contains($_) }) +
-                  @($bySev.Keys | Where-Object { $_ -notin $order })
+        $extra = @($bySev.Keys | Where-Object { $_ -notin $order })
+        $ranked = @($order | Where-Object { $bySev.Contains($_) }) + $extra
         $severityOut = foreach ($s in $ranked) { [pscustomobject]@{ sev = $s; count = $bySev[$s] } }
         $severityOut = @($severityOut)
     }
@@ -172,12 +172,11 @@ function New-ShcReport {
     # are valid in JSON but break some parsers as raw line separators.
     $json = $report | ConvertTo-Json -Depth 12 -Compress
     $bs = [char]0x5C
-    $json = $json.
-        Replace('&', "${bs}u0026").
-        Replace('<', "${bs}u003c").
-        Replace('>', "${bs}u003e").
-        Replace([string][char]0x2028, "${bs}u2028").
-        Replace([string][char]0x2029, "${bs}u2029")
+    $json = $json.Replace('&', "${bs}u0026")
+    $json = $json.Replace('<', "${bs}u003c")
+    $json = $json.Replace('>', "${bs}u003e")
+    $json = $json.Replace([string][char]0x2028, "${bs}u2028")
+    $json = $json.Replace([string][char]0x2029, "${bs}u2029")
 
     $wsSafe = ([string]$Result.WorkspaceName).Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;')
 
@@ -455,11 +454,11 @@ function New-ShcReport {
 const REPORT = JSON.parse(document.getElementById("shc-data").textContent);
 
 const STATUS = {
-  good:    { color:"var(--good)",     soft:"var(--good-soft)",     ico:"✔", label:"Healthy" },
-  warning: { color:"var(--warning)",  soft:"var(--warning-soft)",  ico:"▲", label:"Needs attention" },
-  serious: { color:"var(--serious)",  soft:"var(--serious-soft)",  ico:"▲", label:"Degraded" },
-  critical:{ color:"var(--critical)", soft:"var(--critical-soft)", ico:"✖", label:"Failing" },
-  unknown: { color:"var(--muted)",    soft:"var(--surface-2)",     ico:"–", label:"Not measured" },
+  good:    { color:"var(--good)",     soft:"var(--good-soft)",     ico:"\u2714", label:"Healthy" },
+  warning: { color:"var(--warning)",  soft:"var(--warning-soft)",  ico:"\u25B2", label:"Needs attention" },
+  serious: { color:"var(--serious)",  soft:"var(--serious-soft)",  ico:"\u25B2", label:"Degraded" },
+  critical:{ color:"var(--critical)", soft:"var(--critical-soft)", ico:"\u2716", label:"Failing" },
+  unknown: { color:"var(--muted)",    soft:"var(--surface-2)",     ico:"\u2013", label:"Not measured" },
 };
 const SEV = { High:"var(--critical)", Medium:"var(--serious)", Low:"var(--warning)", Informational:"var(--seq)" };
 const sevColor = s => SEV[s] || "var(--muted)";
@@ -526,7 +525,7 @@ function svgEl(name,attrs){ const n=document.createElementNS("http://www.w3.org/
     const row=el("div","bar-row"); row.tabIndex=0; row.setAttribute("role","button");
     row.innerHTML =
       '<div class="bar-label"><span class="bar-id">'+esc(c.id)+'</span>'+esc(c.title)+'</div>'+
-      '<div class="bar-score" style="color:'+(has?s.color:"var(--muted)")+'">'+(has?c.score:"–")+'</div>'+
+      '<div class="bar-score" style="color:'+(has?s.color:"var(--muted)")+'">'+(has?c.score:"\u2013")+'</div>'+
       '<div class="bar-track"><div class="bar-fill" style="background:'+s.color+';width:0"></div></div>';
     const fill=row.querySelector(".bar-fill");
     const w=(has?c.score:0)+"%";
@@ -534,7 +533,7 @@ function svgEl(name,attrs){ const n=document.createElementNS("http://www.w3.org/
     const go=()=>{ const t=document.getElementById("card-"+c.id); if(t) t.scrollIntoView({block:"center"}); };
     row.addEventListener("click",go);
     row.addEventListener("keydown",e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); go(); }});
-    row.addEventListener("mousemove",e=>tip(e,"<b>"+esc(c.id)+" · "+esc(c.title)+"</b><br>"+s.label+" · weight "+c.weight+"<br>"+esc(c.headline)));
+    row.addEventListener("mousemove",e=>tip(e,"<b>"+esc(c.id)+" \u00B7 "+esc(c.title)+"</b><br>"+s.label+" \u00B7 weight "+c.weight+"<br>"+esc(c.headline)));
     row.addEventListener("mouseleave",tipOff);
     wrap.appendChild(row);
   });
@@ -550,7 +549,7 @@ function svgEl(name,attrs){ const n=document.createElementNS("http://www.w3.org/
     const frac=d.count/total, sweep=frac*360;
     const p=svgEl("path",{ d:arc(cx,cy,r,ang+gap/2,ang+sweep-gap/2), fill:"none",
       stroke:sevColor(d.sev), "stroke-width":w, "stroke-linecap":"round" });
-    p.addEventListener("mousemove",e=>tip(e,"<b>"+esc(d.sev)+"</b><br>"+d.count+" rules · "+Math.round(frac*100)+"%"));
+    p.addEventListener("mousemove",e=>tip(e,"<b>"+esc(d.sev)+"</b><br>"+d.count+" rules \u00B7 "+Math.round(frac*100)+"%"));
     p.addEventListener("mouseleave",tipOff);
     svg.appendChild(p); ang+=sweep;
     const lr=el("div","legend-row");
@@ -574,7 +573,7 @@ function svgEl(name,attrs){ const n=document.createElementNS("http://www.w3.org/
   att.forEach(c=>{
     const s=st(c.status);
     const card=el("section","check"); card.id="card-"+c.id; card.style.borderLeftColor=s.color;
-    const scoreTxt = (c.score===null||c.score===undefined) ? "" : " · "+c.score+"/100";
+    const scoreTxt = (c.score===null||c.score===undefined) ? "" : " \u00B7 "+c.score+"/100";
     card.innerHTML =
       '<div class="check-head">'+
         '<span class="check-title"><span class="bar-id">'+esc(c.id)+'</span>'+esc(c.title)+'</span>'+
@@ -591,13 +590,13 @@ function buildTable(c){
   const box=el("div");
   const tools=el("div","tbl-tools");
   const search=el("div","search");
-  search.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input type="text" placeholder="Filter '+c.rows.length+' findings…" aria-label="Filter findings">';
+  search.innerHTML='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg><input type="text" placeholder="Filter '+c.rows.length+' findings\u2026" aria-label="Filter findings">';
   const count=el("span","tbl-count");
   tools.append(search,count); box.appendChild(tools);
   const input=search.querySelector("input");
 
   const tw=el("div","table-wrap"), tbl=el("table"), thead=el("thead"), htr=el("tr");
-  c.columns.forEach((col,i)=>{ const th=el("th"); th.innerHTML=esc(col.h)+' <span class="arrow">▲</span>'; th.dataset.i=i; htr.appendChild(th); });
+  c.columns.forEach((col,i)=>{ const th=el("th"); th.innerHTML=esc(col.h)+' <span class="arrow">\u25B2</span>'; th.dataset.i=i; htr.appendChild(th); });
   thead.appendChild(htr); tbl.appendChild(thead);
   const tbody=el("tbody"); tbl.appendChild(tbody); tw.appendChild(tbl); box.appendChild(tw);
 
@@ -618,7 +617,7 @@ function buildTable(c){
     }
     tbody.innerHTML="";
     if(!view.length){ const tr=el("tr"), td=el("td"); td.colSpan=c.columns.length; td.className="empty";
-      td.textContent="No findings match “"+input.value+"”."; tr.appendChild(td); tbody.appendChild(tr); }
+      td.textContent="No findings match \u201C"+input.value+"\u201D."; tr.appendChild(td); tbody.appendChild(tr); }
     view.forEach(r=>{
       const tr=el("tr");
       c.columns.forEach(col=>{
@@ -637,8 +636,8 @@ function buildTable(c){
     th.addEventListener("click",()=>{
       const i=+th.dataset.i;
       if(sortCol===i) sortDir*=-1; else { sortCol=i; sortDir=1; }
-      htr.querySelectorAll("th").forEach(x=>{ x.classList.remove("sorted"); x.querySelector(".arrow").textContent="▲"; });
-      th.classList.add("sorted"); th.querySelector(".arrow").textContent=sortDir>0?"▲":"▼";
+      htr.querySelectorAll("th").forEach(x=>{ x.classList.remove("sorted"); x.querySelector(".arrow").textContent="\u25B2"; });
+      th.classList.add("sorted"); th.querySelector(".arrow").textContent=sortDir>0?"\u25B2":"\u25BC";
       render();
     });
   });
