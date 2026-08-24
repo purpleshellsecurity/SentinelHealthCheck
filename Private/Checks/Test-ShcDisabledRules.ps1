@@ -22,7 +22,7 @@ function Test-ShcDisabledRules {
 
         $lastModified = ''
         if ($props.PSObject.Properties['lastModifiedUtc'] -and $props.lastModifiedUtc) {
-            $lastModified = ([datetime]$props.lastModifiedUtc).ToString('yyyy-MM-dd')
+            $lastModified = (ConvertTo-ShcUtc $props.lastModifiedUtc).ToString('yyyy-MM-dd')
         }
         $severity = if ($props.PSObject.Properties['severity']) { [string]$props.severity } else { '' }
 

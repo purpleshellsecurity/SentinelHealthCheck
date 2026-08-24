@@ -2,6 +2,89 @@
 
 All notable changes to this module. Format loosely follows Keep a Changelog.
 
+## [0.4.0-beta] - 2026-08-24
+
+### Fixed
+- **Sovereign clouds now work.** The Log Analytics query host and token audience
+  were hardcoded to `api.loganalytics.io`, so in Azure Government
+  (`api.loganalytics.us`) and China (`api.loganalytics.azure.cn`) every KQL-backed
+  check failed at the token request and degraded to "not measurable" - leaving the
+  grade meaningless. Both are now resolved per cloud from the signed-in context via
+  `Get-ShcLogAnalyticsEndpoint`, falling back to the commercial defaults when an
+  older `Az.Accounts` leaves the environment properties blank. ARM calls needed no
+  change: `Invoke-AzRestMethod -Path` already resolves against the context.
+- **Timestamps are normalised to UTC.** `[datetime]'...Z'` yields `Kind=Local`, so
+  any API value that arrived as a string (rather than being auto-converted by the
+  JSON deserializer) was compared against the `Kind=Utc` window end with the host's
+  offset baked in - under-reporting staleness east of UTC and over-reporting west,
+  and rendering dates a day off. All API timestamps now pass through
+  `ConvertTo-ShcUtc`, which honours the offset and is invariant to host time zone
+  and culture. HC-02 also skips `Usage` rows with no parseable timestamp instead of
+  inventing a staleness figure from a blank.
+- **A rendering failure no longer discards a completed scan.** `New-ShcReport` was
+  the one unguarded call in the orchestrator, so anything it threw cost the user the
+  whole run - two ARM collections and every KQL query - after all the work was done.
+  It is now wrapped, `-PassThru` still returns the result, and the console says the
+  report was not written rather than naming a file that does not exist. (A companion
+  StrictMode fix for the old PowerShell table renderer was dropped in the 0.3.1-beta
+  merge: the dashboard redesign moved table building into the browser, so that code
+  no longer exists.)
+- **`-OutputPath` is validated before the scan, not after.** A missing directory
+  surfaced only at the final `Set-Content`, throwing away two ARM collections and
+  ~10 KQL queries. The path is now resolved and checked before the first ARM call.
+  `New-ShcReport` also writes with `-LiteralPath` (`-Path` treats `[` and `]` as
+  wildcards and fails on paths containing them), and the default path uses
+  `$PWD.ProviderPath` so it stays correct when the caller is on a non-filesystem
+  provider.
+
+- **HC-02 missed the worst case it existed to catch.** Candidate tables came from
+  the `Usage` table, which only lists tables that have ingested — so a table that
+  has **never** ingested produced no `Usage` row and was never considered. Found on
+  a live workspace: eight Kubernetes rules watching an empty `AKSAudit`, plus rules
+  on `Event` and `NTANetAnalytics`, all graded healthy. Candidates now come from the
+  workspace's full ARM table inventory (`Get-ShcWorkspaceTables`), and a referenced
+  table absent from `Usage` is probed directly. Findings gained an `Issue` column
+  distinguishing `Stale` from `No data` / `Table not found`. On the workspace that
+  surfaced this, the check went from 2 affected rules (8.7%) to 12 (52.2%).
+- **HC-02 no longer counts a table named only in a comment or string literal.**
+  Matching ran against raw query text, so `// AzureActivity is not used here` made
+  a rule "watch" AzureActivity. `Get-ShcQueryTables` strips comments and string
+  literals before matching — this removed a real false positive on the live
+  workspace while raising per-rule coverage from 13/23 to 23/23.
+- **HC-04 had no blindness gate.** With an empty `SecurityAlert` it reported
+  "N of N rules never fired" and scored 0/100 — the most alarming finding the tool
+  produces, derived from a table with no data, unable to distinguish "no rule fired"
+  from "alerts are not reaching the table". It now returns `unknown` and is excluded
+  from the grade, matching HC-01/HC-02/HC-03. Same bug class as commit `885d61d`.
+
+- **A non-Sentinel workspace produced a wall of escaped JSON.** Pointing the scan
+  at a Log Analytics workspace that is not onboarded to Sentinel — the most likely
+  first-run mistake — dumped a double-encoded ARM error body and a full subscription
+  path. `Get-ShcArmErrorMessage` unwraps nested ARM errors, and the onboarding case
+  now reports one readable line telling you what to do.
+- **No retry on throttling or transient failures.** Any 429 or 5xx mid-paging killed
+  the whole scan. ARM paging now retries `408/429/500/502/503/504` up to five times,
+  honouring `Retry-After` when present (capped at 60s) and backing off exponentially
+  otherwise; the query path uses PowerShell 7's `-MaximumRetryCount`/`-RetryIntervalSec`.
+  This matters more since HC-02 began probing tables absent from `Usage`.
+- **ARM paging had no cycle guard.** A `nextLink` pointing back at an already-read
+  page would loop forever; repeated links now stop paging with a warning.
+- **HC-02 asserted a diagnosis it had not earned.** The summary said "fix the feed"
+  for every finding. A table that resolves but has never held a row looks identical
+  whether the feed is broken or the rule is deployed to the wrong workspace — a real
+  case found in testing, where eight rules watched an `AKSAudit` that lives in a
+  different workspace entirely. The `No data` wording now names both possibilities.
+
+### Added
+- `TESTING.md`: local verification guide, including the time-zone matrix that CI
+  (UTC-only) cannot cover.
+- Regression tests for each fix above, plus `ConvertTo-ShcUtc`,
+  `Get-ShcLogAnalyticsEndpoint`, `Get-ShcQueryTables`, `Get-ShcArmErrorMessage` and retry/backoff
+  unit tests, plus source guards pinning the hostname fix and asserting every file
+  parses (PSScriptAnalyzer reports nothing for a file with a syntax error, so the
+  lint gate alone cannot catch one). Suite is 80
+  tests, green in UTC, US Eastern/Pacific, Kolkata (UTC+5:30), Sydney and
+  Kiritimati (UTC+14).
 ## [0.3.1-beta] - 2026-08-08
 
 ### Changed

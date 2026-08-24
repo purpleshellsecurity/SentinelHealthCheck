@@ -20,6 +20,11 @@ Invoke-Pester -Path ./tests
 
 CI runs both on every push and PR; a warning fails the build.
 
+See **[TESTING.md](TESTING.md)** for the full local verification guide — including
+the time-zone matrix, which CI cannot cover because it runs UTC-only. Run that
+matrix whenever a change touches a timestamp, a date format, or a staleness
+comparison.
+
 ## Rules that are not style preferences
 
 - **Evidence discipline.** A new check needs a source: a Microsoft doc or a

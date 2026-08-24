@@ -61,7 +61,7 @@ SentinelHealth
                 [pscustomobject]@{
                     RuleName    = $_.RuleName
                     LastStatus  = $_.LastStatus
-                    LastSeenUtc = ([datetime]$_.LastSeenUtc).ToString('yyyy-MM-dd HH:mm')
+                    LastSeenUtc = (ConvertTo-ShcUtc $_.LastSeenUtc).ToString('yyyy-MM-dd HH:mm')
                     Detail      = $_.Detail
                 }
             })

@@ -720,5 +720,6 @@ function tipOff(){ TIP.classList.remove("on"); }
 '@
 
     $html = $template.Replace('{{WORKSPACE}}', $wsSafe).Replace('{{DATA}}', $json)
-    Set-Content -Path $Path -Value $html -Encoding utf8
+    # -LiteralPath: -Path treats [ ] as wildcards and fails on paths containing them.
+    Set-Content -LiteralPath $Path -Value $html -Encoding utf8
 }
