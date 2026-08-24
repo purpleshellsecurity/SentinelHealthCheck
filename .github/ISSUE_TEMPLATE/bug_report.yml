@@ -12,7 +12,7 @@ body:
     attributes:
       label: Module version
       description: From the report footer or `(Import-PowerShellDataFile ./SentinelHealthCheck.psd1).ModuleVersion`
-      placeholder: "0.3.0-beta"
+      placeholder: "0.4.0-beta"
     validations:
       required: true
   - type: input
