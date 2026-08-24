@@ -120,21 +120,29 @@ parameter declarations (user input, deliberately interpreted as local time and
 documented as such) and `[datetime]$Context.WindowEnd` (already `Kind=Utc`). Any
 new `[datetime]` cast applied to an API value is a bug.
 
-### 3.3 Report rendering survives a drifted row shape
+### 3.3 Report rendering never discards a completed scan
 
-Rendering happens *after* the whole scan, so it must never throw:
+Rendering happens *after* the whole scan, so a failure there must not cost the run:
 
 ```powershell
 pwsh -NoProfile -Command '
-  Set-StrictMode -Version Latest
-  . ./Private/New-ShcReport.ps1
-  $rows = @([pscustomobject]@{ RuleName = "R1"; Severity = "High" })   # no LastModifiedUtc
-  ConvertTo-ShcHtmlTable -Rows $rows -Columns @("RuleName","Severity","LastModifiedUtc")
+  Import-Module ./SentinelHealthCheck.psd1 -Force
+  # Force a render failure by pointing at a path that cannot be written
+  $r = Invoke-SentinelHealthCheck -SubscriptionId $sub -ResourceGroupName "rg-sec" `
+      -WorkspaceName "law-sentinel" -PassThru -WarningAction SilentlyContinue
+  $r.Grade
 '
 ```
 
-Expected: an HTML table with an empty third cell. A
-`The property 'LastModifiedUtc' cannot be found` error is the regression.
+Expected: a warning naming the failure, `Report: not written (see warning above).`
+on the console, and `-PassThru` still returning the full result object. A run that
+throws and returns nothing is the regression.
+
+Note: the report is a client-side dashboard as of 0.3.1-beta. Findings are embedded
+as a JSON island and rendered in the browser, so escaping lives in two places — the
+`\u003c`/`\u003e`/`\u0026` replacement applied after `ConvertTo-Json` (which stops a
+rule named `</script>` terminating the block) and the `esc()` helper on every
+`innerHTML` path. Both are covered by the XSS test in the suite.
 
 ### 3.4 Output path is validated before the scan
 

@@ -21,12 +21,14 @@ All notable changes to this module. Format loosely follows Keep a Changelog.
   `ConvertTo-ShcUtc`, which honours the offset and is invariant to host time zone
   and culture. HC-02 also skips `Usage` rows with no parseable timestamp instead of
   inventing a staleness figure from a blank.
-- **A drifted row shape no longer costs the whole report.** `ConvertTo-ShcHtmlTable`
-  read `$row.$col` directly, which `Set-StrictMode -Version Latest` makes a
-  terminating error - and rendering runs *after* the entire scan, so one check
-  whose findings drifted from its declared `Columns` destroyed a completed run.
-  Missing cells now render empty, and a rendering failure is caught so `-PassThru`
-  still returns the result.
+- **A rendering failure no longer discards a completed scan.** `New-ShcReport` was
+  the one unguarded call in the orchestrator, so anything it threw cost the user the
+  whole run - two ARM collections and every KQL query - after all the work was done.
+  It is now wrapped, `-PassThru` still returns the result, and the console says the
+  report was not written rather than naming a file that does not exist. (A companion
+  StrictMode fix for the old PowerShell table renderer was dropped in the 0.3.1-beta
+  merge: the dashboard redesign moved table building into the browser, so that code
+  no longer exists.)
 - **`-OutputPath` is validated before the scan, not after.** A missing directory
   surfaced only at the final `Set-Content`, throwing away two ARM collections and
   ~10 KQL queries. The path is now resolved and checked before the first ARM call.
@@ -83,6 +85,19 @@ All notable changes to this module. Format loosely follows Keep a Changelog.
   lint gate alone cannot catch one). Suite is 80
   tests, green in UTC, US Eastern/Pacific, Kolkata (UTC+5:30), Sydney and
   Kiritimati (UTC+14).
+## [0.3.1-beta] - 2026-08-08
+
+### Changed
+- Redesigned the HTML report as an interactive dashboard: a radial score gauge
+  with the grade at its center, a per-check score bar chart (worst-first; click a
+  bar to jump to that check), a "never-fired rules by severity" donut, and live
+  search plus column-sort on every findings table. Added a light/dark theme
+  toggle, with both themes designed. The report is still a single,
+  self-contained, offline file with no external dependencies.
+- The renderer now embeds the scan result as an HTML-safe JSON island and builds
+  the page client-side, replacing the server-side HTML-table building. Untrusted
+  strings (rule names, incident titles) are unicode-escaped so nothing can break
+  out of the data block, and every value is written to the DOM as text.
 
 ## [0.3.0-beta] - 2026-07-29
 

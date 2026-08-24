@@ -3,7 +3,7 @@
 [![CI](https://github.com/purpleshellsecurity/SentinelHealthCheck/actions/workflows/ci.yml/badge.svg)](https://github.com/purpleshellsecurity/SentinelHealthCheck/actions/workflows/ci.yml)
 
 > [!IMPORTANT]
-> **Beta (0.3.0-beta).** This is a pre-release looking for testers. It is
+> **Beta (0.3.1-beta).** This is a pre-release looking for testers. It is
 > read-only and safe to run, but expect rough edges — if something breaks or a
 > finding looks wrong, please [open an issue](https://github.com/purpleshellsecurity/SentinelHealthCheck/issues).
 
