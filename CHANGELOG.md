@@ -55,11 +55,32 @@ All notable changes to this module. Format loosely follows Keep a Changelog.
   from "alerts are not reaching the table". It now returns `unknown` and is excluded
   from the grade, matching HC-01/HC-02/HC-03. Same bug class as commit `885d61d`.
 
+- **A non-Sentinel workspace produced a wall of escaped JSON.** Pointing the scan
+  at a Log Analytics workspace that is not onboarded to Sentinel — the most likely
+  first-run mistake — dumped a double-encoded ARM error body and a full subscription
+  path. `Get-ShcArmErrorMessage` unwraps nested ARM errors, and the onboarding case
+  now reports one readable line telling you what to do.
+- **No retry on throttling or transient failures.** Any 429 or 5xx mid-paging killed
+  the whole scan. ARM paging now retries `408/429/500/502/503/504` up to five times,
+  honouring `Retry-After` when present (capped at 60s) and backing off exponentially
+  otherwise; the query path uses PowerShell 7's `-MaximumRetryCount`/`-RetryIntervalSec`.
+  This matters more since HC-02 began probing tables absent from `Usage`.
+- **ARM paging had no cycle guard.** A `nextLink` pointing back at an already-read
+  page would loop forever; repeated links now stop paging with a warning.
+- **HC-02 asserted a diagnosis it had not earned.** The summary said "fix the feed"
+  for every finding. A table that resolves but has never held a row looks identical
+  whether the feed is broken or the rule is deployed to the wrong workspace — a real
+  case found in testing, where eight rules watched an `AKSAudit` that lives in a
+  different workspace entirely. The `No data` wording now names both possibilities.
+
 ### Added
 - `TESTING.md`: local verification guide, including the time-zone matrix that CI
   (UTC-only) cannot cover.
 - Regression tests for each fix above, plus `ConvertTo-ShcUtc`,
-  `Get-ShcLogAnalyticsEndpoint` and `Get-ShcQueryTables` unit tests. Suite is 68
+  `Get-ShcLogAnalyticsEndpoint`, `Get-ShcQueryTables`, `Get-ShcArmErrorMessage` and retry/backoff
+  unit tests, plus source guards pinning the hostname fix and asserting every file
+  parses (PSScriptAnalyzer reports nothing for a file with a syntax error, so the
+  lint gate alone cannot catch one). Suite is 80
   tests, green in UTC, US Eastern/Pacific, Kolkata (UTC+5:30), Sydney and
   Kiritimati (UTC+14).
 

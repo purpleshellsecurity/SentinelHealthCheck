@@ -52,8 +52,15 @@ function Invoke-ShcQuery {
         Invoke-AzOperationalInsightsQuery: one endpoint does not justify a second
         required module - Az.Accounts stays the only dependency.
 
-        The host is resolved per cloud via Get-ShcLogAnalyticsEndpoint, so this
-        works in Azure Government and China as well as commercial.
+        Going raw means the SDK's conveniences become this module's job. What that
+        buys and what it costs:
+          - endpoint resolution -> Get-ShcLogAnalyticsEndpoint (per-cloud)
+          - throttling / transient failures -> MaximumRetryCount + RetryIntervalSec
+          - token shape across Az.Accounts versions -> the SecureString branch below
+        Adding a call here means checking that list. The alternative,
+        Az.OperationalInsights' Invoke-AzOperationalInsightsQuery, cannot express
+        an absolute start/end interval - its -Timespan is a [timespan] duration -
+        so it cannot serve -StartDate/-EndDate or HC-01's sub-window gate.
     #>
     [CmdletBinding()]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '',
@@ -90,6 +97,11 @@ function Invoke-ShcQuery {
         ContentType    = 'application/json'
         Body           = $body
         ErrorAction    = 'Stop'
+        # PowerShell 7 retries 429 and 5xx natively. The query API throttles per
+        # workspace, and a scan issues ~10 queries plus one probe per referenced
+        # table that Usage does not cover, so this is reachable on a large estate.
+        MaximumRetryCount = 5
+        RetryIntervalSec  = 5
     }
     $response = Invoke-RestMethod @params
 

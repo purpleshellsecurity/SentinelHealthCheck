@@ -983,3 +983,124 @@ Describe 'Test-ShcNeverFiredRules blindness gate (HC-04)' {
         $r.Headline | Should -Match 'not available'
     }
 }
+
+Describe 'Get-ShcArmErrorMessage' {
+    It 'unwraps the double-encoded SecurityInsights onboarding error (regression)' {
+        # Raw, this reached the user as a wall of escaped JSON plus a full
+        # subscription path - on the most likely first-run mistake there is.
+        $body = '{"error":{"code":"BadRequest","message":"{\"error\":{\"code\":\"BadRequest\",\"message\":\"Workspace ''law-x'' is not onboarded to Microsoft Sentinel. Please onboard through the portal.\"}}"}}'
+        $msg = Get-ShcArmErrorMessage -Content $body
+        $msg | Should -Be "Workspace 'law-x' is not onboarded to Microsoft Sentinel. Please onboard through the portal."
+        $msg | Should -Not -Match '\\"'
+        $msg | Should -Not -Match 'subscriptions/'
+    }
+    It 'returns a single-level error message unchanged' {
+        Get-ShcArmErrorMessage -Content '{"error":{"code":"NotFound","message":"No such thing."}}' | Should -Be 'No such thing.'
+    }
+    It 'passes through non-JSON and empty content without throwing' {
+        Get-ShcArmErrorMessage -Content 'plain text failure' | Should -Be 'plain text failure'
+        Get-ShcArmErrorMessage -Content '' | Should -Be ''
+        Get-ShcArmErrorMessage -Content $null | Should -Be ''
+    }
+}
+
+Describe 'Get-ShcRetryDelaySeconds' {
+    It 'honours a Retry-After header over its own backoff' {
+        $resp = [pscustomobject]@{ Headers = @([System.Collections.Generic.KeyValuePair[string, string[]]]::new('Retry-After', @('7'))) }
+        Get-ShcRetryDelaySeconds -Response $resp -Attempt 1 | Should -Be 7
+    }
+    It 'caps Retry-After so a hostile value cannot stall the scan' {
+        $resp = [pscustomobject]@{ Headers = @([System.Collections.Generic.KeyValuePair[string, string[]]]::new('Retry-After', @('99999'))) }
+        Get-ShcRetryDelaySeconds -Response $resp -Attempt 1 | Should -Be 60
+    }
+    It 'backs off exponentially with a ceiling when no header is present' {
+        Get-ShcRetryDelaySeconds -Response $null -Attempt 1 | Should -Be 2
+        Get-ShcRetryDelaySeconds -Response $null -Attempt 3 | Should -Be 8
+        Get-ShcRetryDelaySeconds -Response $null -Attempt 10 | Should -Be 30
+    }
+}
+
+Describe 'Get-ShcArmCollection resilience' {
+    It 'retries a 429 and succeeds (regression)' {
+        # Any 429 mid-paging used to kill the whole scan.
+        $script:calls = 0
+        # Stub the delay, not Start-Sleep: overwriting a built-in cmdlet trips the
+        # linter, and Start-Sleep -Seconds 0 returns immediately anyway.
+        function Get-ShcRetryDelaySeconds { param($Response, $Attempt) $null = $Response, $Attempt; 0 }
+        function Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            $null = $Path, $Method, $ErrorAction
+            $script:calls++
+            if ($script:calls -eq 1) { return [pscustomobject]@{ StatusCode = 429; Content = '{}'; Headers = @() } }
+            [pscustomobject]@{ StatusCode = 200; Content = '{"value":[{"name":"r1"}]}'; Headers = @() }
+        }
+        $r = @(Get-ShcArmCollection -Path '/x')
+        $script:calls | Should -Be 2
+        $r.Count | Should -Be 1
+        $r[0].name | Should -Be 'r1'
+    }
+    It 'gives up after the attempt cap and reports the real error' {
+        $script:calls = 0
+        function Get-ShcRetryDelaySeconds { param($Response, $Attempt) $null = $Response, $Attempt; 0 }
+        function Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            $null = $Path, $Method, $ErrorAction
+            $script:calls++
+            [pscustomobject]@{ StatusCode = 503; Content = '{"error":{"code":"Busy","message":"Service unavailable."}}'; Headers = @() }
+        }
+        { Get-ShcArmCollection -Path '/x' } | Should -Throw '*Service unavailable*'
+        $script:calls | Should -Be 6   # first call plus five retries
+    }
+    It 'does not retry a real 400, and surfaces the unwrapped message' {
+        $script:calls = 0
+        function Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            $null = $Path, $Method, $ErrorAction
+            $script:calls++
+            [pscustomobject]@{ StatusCode = 400
+                Content = '{"error":{"code":"BadRequest","message":"{\"error\":{\"code\":\"BadRequest\",\"message\":\"Workspace ''law-x'' is not onboarded to Microsoft Sentinel.\"}}"}}'
+                Headers = @() }
+        }
+        { Get-ShcArmCollection -Path '/x' } | Should -Throw '*not onboarded to Microsoft Sentinel*'
+        $script:calls | Should -Be 1
+    }
+    It 'stops instead of looping when nextLink repeats (regression)' {
+        $script:calls = 0
+        function Invoke-AzRestMethod {
+            param($Path, $Method, $ErrorAction)
+            $null = $Path, $Method, $ErrorAction
+            $script:calls++
+            [pscustomobject]@{ StatusCode = 200
+                Content = '{"value":[{"name":"r1"}],"nextLink":"https://management.azure.com/x"}'
+                Headers = @() }
+        }
+        $r = @(Get-ShcArmCollection -Path '/x' -WarningAction SilentlyContinue)
+        $script:calls | Should -Be 1   # second page is the same link, so it stops
+        $r.Count | Should -Be 1
+    }
+}
+
+Describe 'Source guards' {
+    It 'has no Log Analytics hostname outside Get-ShcLogAnalyticsEndpoint (regression)' {
+        # The hardcoded api.loganalytics.io shipped on day one and survived a
+        # commit titled "Best-practices review". Pin it so it cannot come back.
+        $root = Split-Path $PSScriptRoot -Parent
+        $offenders = Get-ChildItem "$root/Private", "$root/Public" -Filter '*.ps1' -Recurse |
+            Where-Object { $_.Name -ne 'Invoke-ShcQuery.ps1' } |
+            Where-Object { (Get-Content $_.FullName -Raw) -match 'loganalytics' } |
+            ForEach-Object { $_.Name }
+        $offenders | Should -BeNullOrEmpty
+    }
+    It 'every source file parses (the linter does not catch syntax errors)' {
+        # A file that fails to parse produces no PSScriptAnalyzer diagnostics at
+        # all, so the CI lint step goes green on unparseable code.
+        $root = Split-Path $PSScriptRoot -Parent
+        $bad = @()
+        foreach ($f in Get-ChildItem "$root/Private", "$root/Public" -Filter '*.ps1' -Recurse) {
+            $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile($f.FullName, [ref]$null, [ref]$errors) | Out-Null
+            if ($errors.Count -gt 0) { $bad += "$($f.Name): $($errors[0].Message)" }
+        }
+        $bad | Should -BeNullOrEmpty
+    }
+}

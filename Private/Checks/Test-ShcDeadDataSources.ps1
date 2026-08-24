@@ -168,10 +168,23 @@ Usage
         'Table inventory unavailable, so only tables present in Usage were evaluated; never-ingested tables are not covered in this run. '
     }
 
+    # 'No data' means the table resolves in this workspace but has never held a row
+    # in the window. A broken feed is only one explanation - rules deployed to the
+    # wrong workspace, or needing a cross-workspace query, look identical from here.
+    # Do not assert a diagnosis the check has not earned.
+    $summary = if ($noDataCount -gt 0) {
+        'These rules run, but their data source is stale or empty, so they can never fire. Tables marked ' +
+        '"No data" exist in this workspace and have never received a row in the window - check whether the ' +
+        'feed is broken, or whether that telemetry lands in a different workspace and the rule needs moving ' +
+        'or a cross-workspace query.'
+    } else {
+        'These rules run, but their data source stopped sending data, so they can never fire. ' +
+        'Fix the feed, or retire the rule if the system is gone.'
+    }
+
     New-ShcCheckResult -CheckId $checkId -Title $title -Weight $weight `
         -Score $score -Status $status -Headline $headline `
-        -Summary ('These rules run, but their data source is stale or empty, so they can never fire. ' +
-        'Fix the feed, or retire the rule if the system is gone.') `
+        -Summary $summary `
         -Findings $sorted -Columns @('RuleName', 'Table', 'Issue', 'LastSeenUtc', 'DaysSilent') `
         -Data @{ TableFreshness = $inventory } `
         -MethodNote ($inventoryNote +
