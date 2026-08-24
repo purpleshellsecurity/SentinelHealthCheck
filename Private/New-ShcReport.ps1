@@ -44,7 +44,10 @@ function ConvertTo-ShcHtmlTable {
     foreach ($row in $Rows) {
         [void]$tb.Append('<tr>')
         foreach ($col in $Columns) {
-            $value = $row.$col
+            # StrictMode makes a missing property a terminating error, and this
+            # runs after the whole scan - a check whose row shape drifts from its
+            # declared Columns would cost the user the entire report.
+            $value = if ($row.PSObject.Properties[$col]) { $row.$col } else { $null }
             $numeric = $value -is [int] -or $value -is [long] -or $value -is [double] -or $value -is [decimal]
             $cls = if ($numeric) { ' class="num"' } else { '' }
             [void]$tb.Append("<td$cls>$(Get-ShcHtmlEncoded ([string]$value))</td>")
@@ -294,5 +297,6 @@ function New-ShcReport {
     Replace('{{CHECKS}}', $checksHtml).
     Replace('{{VERSION}}', (Get-ShcHtmlEncoded $Result.Version))
 
-    Set-Content -Path $Path -Value $html -Encoding utf8
+    # -LiteralPath: -Path treats [ ] as wildcards and fails on paths containing them.
+    Set-Content -LiteralPath $Path -Value $html -Encoding utf8
 }

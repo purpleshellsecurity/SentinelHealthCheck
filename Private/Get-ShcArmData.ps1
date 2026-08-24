@@ -73,6 +73,30 @@ function Get-ShcAutomationRules {
     return Get-ShcArmCollection -Path $path
 }
 
+function Get-ShcWorkspaceTables {
+    <#
+    .SYNOPSIS
+        All table names in the workspace schema, from ARM. Read-only.
+
+    .DESCRIPTION
+        The full inventory, not just tables that have ingested. HC-02 needs this:
+        deriving candidate tables from Usage means a table that has NEVER ingested
+        is absent from the candidate list entirely, so rules pointed at it are
+        invisible to the check meant to catch exactly that.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$SubscriptionId,
+        [Parameter(Mandatory)][string]$ResourceGroupName,
+        [Parameter(Mandatory)][string]$WorkspaceName
+    )
+
+    $path = "/subscriptions/$SubscriptionId/resourceGroups/$ResourceGroupName" +
+    "/providers/Microsoft.OperationalInsights/workspaces/$WorkspaceName" +
+    '/tables?api-version=2022-10-01'
+    return @(Get-ShcArmCollection -Path $path | ForEach-Object { $_.name })
+}
+
 function New-ShcCheckResult {
     <#
     .SYNOPSIS

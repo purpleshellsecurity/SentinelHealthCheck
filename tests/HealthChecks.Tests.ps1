@@ -88,6 +88,7 @@ Describe 'Get-ShcTimeWindow' {
 
 Describe 'Test-ShcNeverFiredRules (HC-04)' {
     It 'separates never-fired rules from low-volume firing rules' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
         function Invoke-ShcQuery {
             param($WorkspaceId, $Query, $TimespanDays)
             $null = $WorkspaceId, $Query, $TimespanDays
@@ -102,6 +103,7 @@ Describe 'Test-ShcNeverFiredRules (HC-04)' {
         @($r.Data['LowVolume']).RuleName | Should -Not -Contain 'Silent'
     }
     It 'ranks the low-volume leaderboard by ascending fire count, capped at ten' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
         function Invoke-ShcQuery {
             param($WorkspaceId, $Query, $TimespanDays)
             $null = $WorkspaceId, $Query, $TimespanDays
@@ -688,5 +690,296 @@ Describe 'Invoke-SentinelHealthCheck orchestration' {
         $out[1].WorkspaceName | Should -Be 'w2'
         @($script:pipedReports).Count | Should -Be 2
         $script:pipedReports[0] | Should -Not -Be $script:pipedReports[1]
+    }
+}
+
+Describe 'ConvertTo-ShcUtc' {
+    It 'normalises API timestamps to UTC regardless of the host time zone (regression)' {
+        # The original bug: [datetime]'...Z' yields Kind=Local, so comparing it
+        # against the Kind=Utc window end skewed staleness by the local offset -
+        # under-reporting dead data sources east of UTC, over-reporting west.
+        (ConvertTo-ShcUtc '2026-06-01T00:00:00Z').Kind | Should -Be 'Utc'
+        (ConvertTo-ShcUtc '2026-06-01T00:00:00Z').ToString('yyyy-MM-dd HH:mm') | Should -Be '2026-06-01 00:00'
+        (ConvertTo-ShcUtc '2026-06-01T00:00:00.1234567Z').ToString('yyyy-MM-dd') | Should -Be '2026-06-01'
+        # An explicit offset is honoured, not assumed to be local.
+        (ConvertTo-ShcUtc '2026-06-01T10:00:00+10:00').ToString('yyyy-MM-dd HH:mm') | Should -Be '2026-06-01 00:00'
+    }
+    It 'passes through a Kind=Utc DateTime and converts a Kind=Local one' {
+        $utc = [datetime]::SpecifyKind([datetime]'2026-06-01T00:00:00', 'Utc')
+        (ConvertTo-ShcUtc $utc) | Should -Be $utc
+        $local = [datetime]::SpecifyKind([datetime]'2026-06-01T00:00:00', 'Local')
+        (ConvertTo-ShcUtc $local) | Should -Be $local.ToUniversalTime()
+        (ConvertTo-ShcUtc $local).Kind | Should -Be 'Utc'
+    }
+    It 'treats an offset-less timestamp as UTC rather than shifting it' {
+        # ARM *Utc properties and KQL datetime columns are UTC by contract; a
+        # missing offset must label, never shift.
+        (ConvertTo-ShcUtc '2026-06-01T00:00:00').ToString('yyyy-MM-dd HH:mm') | Should -Be '2026-06-01 00:00'
+    }
+    It 'returns null for null and blank input' {
+        ConvertTo-ShcUtc $null | Should -BeNullOrEmpty
+        ConvertTo-ShcUtc '' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Get-ShcLogAnalyticsEndpoint' {
+    BeforeAll {
+        function script:NewStubEnv {
+            param($Resource, $BaseUri)
+            [pscustomobject]@{
+                AzureOperationalInsightsEndpointResourceId = $Resource
+                AzureOperationalInsightsEndpoint           = $BaseUri
+            }
+        }
+    }
+    It 'resolves the sovereign-cloud host instead of hardcoding commercial (regression)' {
+        # Hardcoding api.loganalytics.io failed at the token request in Azure
+        # Government and China, so every KQL check degraded to "not measurable".
+        function Get-AzContext {
+            [CmdletBinding()] param()
+            [pscustomobject]@{ Environment = NewStubEnv 'https://api.loganalytics.us' 'https://api.loganalytics.us/v1' }
+        }
+        $e = Get-ShcLogAnalyticsEndpoint
+        $e.Resource | Should -Be 'https://api.loganalytics.us'
+        $e.BaseUri  | Should -Be 'https://api.loganalytics.us/v1'
+    }
+    It 'resolves the commercial cloud' {
+        function Get-AzContext {
+            [CmdletBinding()] param()
+            [pscustomobject]@{ Environment = NewStubEnv 'https://api.loganalytics.io' 'https://api.loganalytics.io/v1' }
+        }
+        (Get-ShcLogAnalyticsEndpoint).BaseUri | Should -Be 'https://api.loganalytics.io/v1'
+    }
+    It 'falls back to commercial defaults when the environment omits the endpoints' {
+        # Older Az.Accounts builds leave these blank; a missing property must not
+        # fail the whole scan.
+        function Get-AzContext {
+            [CmdletBinding()] param()
+            [pscustomobject]@{ Environment = [pscustomobject]@{ Name = 'Legacy' } }
+        }
+        $e = Get-ShcLogAnalyticsEndpoint
+        $e.Resource | Should -Be 'https://api.loganalytics.io'
+        $e.BaseUri  | Should -Be 'https://api.loganalytics.io/v1'
+    }
+}
+
+Describe 'ConvertTo-ShcHtmlTable resilience' {
+    It 'renders a row missing a declared column instead of throwing under StrictMode (regression)' {
+        # StrictMode makes a missing property terminating, and rendering happens
+        # after the entire scan - a drifted row shape used to cost the user the
+        # whole report.
+        Set-StrictMode -Version Latest
+        $rows = @([pscustomobject]@{ RuleName = 'R1'; Severity = 'High' })
+        $html = ConvertTo-ShcHtmlTable -Rows $rows -Columns @('RuleName', 'Severity', 'LastModifiedUtc')
+        $html | Should -Match 'R1'
+        $html | Should -Match '<th>LastModifiedUtc</th>'
+    }
+}
+
+Describe 'Invoke-SentinelHealthCheck report path handling' {
+    # Stubs are declared inline in each It: dot-sourced functions live in the
+    # container scope, so only a definition in the caller's own scope shadows them.
+    It 'fails on a missing output directory before spending the scan (regression)' {
+        # The directory used to be validated only by Set-Content at the very end,
+        # so a typo in -OutputPath threw away two ARM collections and ~10 KQL
+        # queries. Nothing should be fetched before the path is checked.
+        $script:armCalls = 0
+        function Get-AzContext { [pscustomobject]@{ Account = 'stub' } }
+        function Get-ShcWorkspace {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName
+            $script:armCalls++
+            [pscustomobject]@{ properties = [pscustomobject]@{ customerId = 'ws-id' } }
+        }
+        function Get-ShcAlertRules {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName; $script:armCalls++; @()
+        }
+        function Get-ShcAutomationRules {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName; $script:armCalls++; @()
+        }
+        function New-ShcReport { param($Result, $Path) $null = $Result, $Path }
+
+        $missing = Join-Path $TestDrive 'no-such-dir/report.html'
+        { Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' -OutputPath $missing } |
+            Should -Throw '*does not exist*'
+        $script:armCalls | Should -Be 0
+    }
+
+    It 'still returns the result when the report cannot be rendered (regression)' {
+        # A completed scan must survive a rendering failure - -PassThru callers
+        # would otherwise lose everything the run cost them.
+        function Get-AzContext { [pscustomobject]@{ Account = 'stub' } }
+        function Get-ShcWorkspace {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName
+            [pscustomobject]@{ properties = [pscustomobject]@{ customerId = 'ws-id' } }
+        }
+        function Get-ShcAlertRules {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName; @()
+        }
+        function Get-ShcAutomationRules {
+            param($SubscriptionId, $ResourceGroupName, $WorkspaceName)
+            $null = $SubscriptionId, $ResourceGroupName, $WorkspaceName; @()
+        }
+        function New-ShcReport { param($Result, $Path) $null = $Result, $Path; throw 'disk on fire' }
+        function Test-ShcObservability { param($Context) $null = $Context; NewStubEnvelope 'HC-09' 80 10 }
+        function Test-ShcErroringRules { param($Context) $null = $Context; NewStubEnvelope 'HC-01' 80 10 }
+        function Test-ShcDeadDataSources { param($Context) $null = $Context; NewStubEnvelope 'HC-02' 80 10 }
+        function Test-ShcNeverFiredRules { param($Context) $null = $Context; NewStubEnvelope 'HC-04' 80 10 }
+        function Test-ShcNoiseLeaders { param($Context) $null = $Context; NewStubEnvelope 'HC-03' 80 10 }
+        function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' 80 10 }
+        function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' 80 10 }
+
+        $r = Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' `
+            -OutputPath (Join-Path $TestDrive 'ok.html') -PassThru -WarningAction SilentlyContinue
+        $r | Should -Not -BeNullOrEmpty
+        $r.Grade | Should -Be 'B'      # every check 80 -> weighted 80
+        @($r.Checks).Count | Should -Be 7
+    }
+}
+
+Describe 'Rendered dates are UTC, not host-local (regression)' {
+    It 'HC-05 renders the UTC date for a UTC-midnight lastModifiedUtc' {
+        # Previously [datetime]'2026-06-01T00:00:00Z' became Kind=Local, so this
+        # rendered as 2026-05-31 for every developer west of Greenwich.
+        $off = [pscustomobject]@{ name = 'off1'; kind = 'Scheduled'; properties = [pscustomobject]@{
+                displayName = 'Off1'; severity = 'High'; enabled = $false; lastModifiedUtc = '2026-06-01T00:00:00Z' } }
+        $r = Test-ShcDisabledRules -Context (NewStubContext -AllRules @($off))
+        $r.Findings[0].LastModifiedUtc | Should -Be '2026-06-01'
+    }
+    It 'HC-04 renders the UTC date for a UTC-midnight lastModifiedUtc' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan; @()
+        }
+        $rule = [pscustomobject]@{ name = 'r1'; kind = 'Scheduled'; properties = [pscustomobject]@{
+                displayName = 'Silent'; severity = 'High'; enabled = $true; query = ''
+                lastModifiedUtc = '2026-06-01T00:00:00Z' } }
+        $r = Test-ShcNeverFiredRules -Context (NewStubContext -QueryRules @($rule))
+        $r.Findings[0].LastModifiedUtc | Should -Be '2026-06-01'
+    }
+    It 'HC-02 measures staleness in UTC for a string timestamp' {
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            # String, not DateTime: the shape that used to land as Kind=Local.
+            @([pscustomobject]@{ DataType = 'SecurityEvent'
+                    LastSeenUtc = (Get-Date).ToUniversalTime().AddDays(-10).ToString('yyyy-MM-ddTHH:mm:ssZ') })
+        }
+        $ctx = NewStubContext -QueryRules @(NewStubRule 'R1' -Query 'SecurityEvent | take 1')
+        $r = Test-ShcDeadDataSources -Context $ctx
+        @($r.Findings).Count | Should -Be 1
+        $r.Findings[0].DaysSilent | Should -Be 10
+    }
+}
+
+Describe 'Get-ShcQueryTables' {
+    It 'ignores table names that appear only in a comment or a string (regression)' {
+        # A table named in a `// comment` used to count as watched, so a rule got
+        # flagged for telemetry it never reads.
+        $q = @'
+// AzureActivity is deliberately not used here
+AuditLogs
+| where Message == "see SigninLogs for detail"
+| take 1
+'@
+        $t = Get-ShcQueryTables -Query $q -KnownTables @('AuditLogs', 'AzureActivity', 'SigninLogs')
+        $t | Should -Be @('AuditLogs')
+    }
+    It 'finds a table regardless of where it appears in the query' {
+        $q = "let x = 5;`nAKSAudit`n| where Verb == 'list'"
+        Get-ShcQueryTables -Query $q -KnownTables @('AKSAudit', 'AuditLogs') | Should -Be @('AKSAudit')
+    }
+    It 'does not match a table name inside a longer token' {
+        Get-ShcQueryTables -Query 'MySecurityEventTable | count' -KnownTables @('SecurityEvent') | Should -BeNullOrEmpty
+    }
+    It 'returns nothing for an empty query' {
+        Get-ShcQueryTables -Query '' -KnownTables @('AuditLogs') | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Test-ShcDeadDataSources - never-ingested tables (HC-02)' {
+    It 'flags a rule watching a table that has never ingested (regression)' {
+        # The original miss: candidate tables came from Usage, so a table with no
+        # billing rows was never even considered. Eight rules watching an empty
+        # AKSAudit graded as healthy.
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            @([pscustomobject]@{ DataType = 'AzureActivity'; LastSeenUtc = (Get-Date).ToUniversalTime() })
+        }
+        function Get-ShcTableState {
+            param($WorkspaceId, $TableName, $Timespan)
+            $null = $WorkspaceId, $Timespan
+            if ($TableName -eq 'AKSAudit') { NewTableState 'empty' } else { NewTableState 'present' ((Get-Date).ToUniversalTime()) }
+        }
+        $ctx = NewStubContext -QueryRules @(NewStubRule 'K8s rule' -Query 'AKSAudit | where Verb == "list"')
+        $ctx.WorkspaceTables = @('AzureActivity', 'AKSAudit')
+
+        $r = Test-ShcDeadDataSources -Context $ctx
+        @($r.Findings).Count | Should -Be 1
+        $r.Findings[0].Table | Should -Be 'AKSAudit'
+        $r.Findings[0].Issue | Should -Be 'No data'
+        $r.Findings[0].LastSeenUtc | Should -Be 'never in window'
+        $r.Status | Should -Be 'critical'
+        $r.Headline | Should -Match 'no data at all'
+    }
+    It 'probes each referenced table once, not once per rule' {
+        $script:probeCount = 0
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            @([pscustomobject]@{ DataType = 'AzureActivity'; LastSeenUtc = (Get-Date).ToUniversalTime() })
+        }
+        function Get-ShcTableState {
+            param($WorkspaceId, $TableName, $Timespan)
+            $null = $WorkspaceId, $TableName, $Timespan
+            $script:probeCount++; NewTableState 'empty'
+        }
+        $ctx = NewStubContext -QueryRules @(
+            (NewStubRule 'R1' -Query 'AKSAudit | take 1'),
+            (NewStubRule 'R2' -Query 'AKSAudit | take 2'),
+            (NewStubRule 'R3' -Query 'AKSAudit | take 3'))
+        $ctx.WorkspaceTables = @('AzureActivity', 'AKSAudit')
+        $r = Test-ShcDeadDataSources -Context $ctx
+        @($r.Findings).Count | Should -Be 3
+        $script:probeCount | Should -Be 1
+    }
+    It 'falls back to Usage-only candidates when the table inventory is unavailable' {
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            @([pscustomobject]@{ DataType = 'SecurityEvent'; LastSeenUtc = (Get-Date).ToUniversalTime().AddDays(-20) })
+        }
+        $ctx = NewStubContext -QueryRules @(NewStubRule 'R1' -Query 'SecurityEvent | take 1')
+        # No WorkspaceTables key at all - the degraded path.
+        $r = Test-ShcDeadDataSources -Context $ctx
+        @($r.Findings).Count | Should -Be 1
+        $r.MethodNote | Should -Match 'Table inventory unavailable'
+    }
+}
+
+Describe 'Test-ShcNeverFiredRules blindness gate (HC-04)' {
+    It 'is ungraded when SecurityAlert holds no alerts at all (regression)' {
+        # 23-of-23-never-fired at 0/100 is the most alarming finding this tool
+        # produces. Derived from an empty table it is not a finding, it is
+        # blindness - and blindness is never health.
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'empty' }
+        $ctx = NewStubContext -QueryRules @((NewStubRule 'A'), (NewStubRule 'B'))
+        $r = Test-ShcNeverFiredRules -Context $ctx
+        $r.Score | Should -BeNullOrEmpty
+        $r.Status | Should -Be 'unknown'
+        $r.Headline | Should -Match 'no alerts of any kind'
+    }
+    It 'is ungraded when the SecurityAlert table is missing' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'missing' }
+        $r = Test-ShcNeverFiredRules -Context (NewStubContext -QueryRules @(NewStubRule 'A'))
+        $r.Score | Should -BeNullOrEmpty
+        $r.Status | Should -Be 'unknown'
+        $r.Headline | Should -Match 'not available'
     }
 }

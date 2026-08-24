@@ -125,6 +125,25 @@ function Invoke-SentinelHealthCheck {
             throw 'Not signed in to Azure. Run Connect-AzAccount first (an account with Microsoft Sentinel Reader + Log Analytics Reader on the workspace).'
         }
 
+        # Local variable, never the parameter: assigning a defaulted path back to
+        # $OutputPath would leak into the next pipeline iteration and overwrite the
+        # first workspace's report with every later one.
+        $reportPath = if ($OutputPath) {
+            $OutputPath
+        } else {
+            $stamp = (Get-Date).ToString('yyyyMMdd-HHmm')
+            # $PWD.ProviderPath, not Get-Location: the latter returns whatever
+            # provider the caller is on (Cert:, HKLM:), which is not a file path.
+            Join-Path $PWD.ProviderPath "SentinelHealthCheck-$WorkspaceName-$stamp.html"
+        }
+        # Fail before the two ARM collections and ~10 KQL queries, not after: a
+        # missing output directory used to surface only at the very end, throwing
+        # away the entire scan.
+        $reportParent = Split-Path -Path $reportPath -Parent
+        if ($reportParent -and -not (Test-Path -LiteralPath $reportParent -PathType Container)) {
+            throw "Cannot write the report: directory '$reportParent' does not exist. Create it first, or pass a different -OutputPath."
+        }
+
         $windowParams = if ($PSCmdlet.ParameterSetName -eq 'DateRange') {
             $p = @{ StartDate = $StartDate }
             if ($PSBoundParameters.ContainsKey('EndDate')) { $p.EndDate = $EndDate }
@@ -142,6 +161,18 @@ function Invoke-SentinelHealthCheck {
         Write-Verbose 'Collecting analytics rules and automation rules'
         $allRules = @(Get-ShcAlertRules -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -WorkspaceName $WorkspaceName)
         $automationRules = @(Get-ShcAutomationRules -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -WorkspaceName $WorkspaceName)
+
+        # Full table inventory, fetched once. HC-02 matches rule queries against
+        # this rather than against Usage, so a table that has never ingested is
+        # still a candidate. A failure here must not sink the run - HC-02 falls
+        # back to Usage-only behaviour when the list is empty.
+        $workspaceTables = @()
+        try {
+            $workspaceTables = @(Get-ShcWorkspaceTables -SubscriptionId $SubscriptionId -ResourceGroupName $ResourceGroupName -WorkspaceName $WorkspaceName)
+        }
+        catch {
+            Write-Warning "Could not read the workspace table inventory: $($_.Exception.Message)"
+        }
 
         $enabledRules = @($allRules | Where-Object {
                 $_.properties.PSObject.Properties['enabled'] -and [bool]$_.properties.enabled
@@ -163,6 +194,7 @@ function Invoke-SentinelHealthCheck {
             QueryRules       = $queryRules
             EnabledRuleCount = $enabledRules.Count
             AutomationRules  = $automationRules
+            WorkspaceTables  = $workspaceTables
         }
 
         # Function -> canonical check identity, in run order. The catch below reuses this
@@ -255,16 +287,16 @@ function Invoke-SentinelHealthCheck {
             Checks        = $checks
         }
 
-        # Local variable, never the parameter: assigning a defaulted path back to
-        # $OutputPath would leak into the next pipeline iteration and overwrite the
-        # first workspace's report with every later one.
-        $reportPath = if ($OutputPath) {
-            $OutputPath
-        } else {
-            $stamp = (Get-Date).ToString('yyyyMMdd-HHmm')
-            Join-Path (Get-Location) "SentinelHealthCheck-$WorkspaceName-$stamp.html"
+        # The scan is done and $result is complete; a rendering failure must not
+        # discard it, or -PassThru callers lose everything the run cost them.
+        $reportWritten = $true
+        try {
+            New-ShcReport -Result $result -Path $reportPath
         }
-        New-ShcReport -Result $result -Path $reportPath
+        catch {
+            $reportWritten = $false
+            Write-Warning "Report could not be written to '$reportPath': $($_.Exception.Message)"
+        }
 
         Write-Host ''
         Write-Host "  Grade: $grade  (weighted score: $(if ($null -ne $score) { [Math]::Round($score, 0) } else { 'n/a' })/100)" -ForegroundColor Cyan
@@ -273,7 +305,11 @@ function Invoke-SentinelHealthCheck {
             Write-Host ("  [{0}] {1,-45} {2,-12} {3}" -f $check.CheckId, $check.Title, $scoreLabel, $check.Headline)
         }
         Write-Host ''
-        Write-Host "  Report: $reportPath" -ForegroundColor Green
+        if ($reportWritten) {
+            Write-Host "  Report: $reportPath" -ForegroundColor Green
+        } else {
+            Write-Host '  Report: not written (see warning above).' -ForegroundColor Yellow
+        }
 
         if ($PassThru) { $result }
     }

@@ -14,6 +14,26 @@ function Test-ShcNeverFiredRules {
     $title   = 'Enabled rules that never fired'
     $weight  = 15
 
+    # Gate on data, not on the query returning nothing. An empty SecurityAlert
+    # cannot distinguish "no rule fired" from "alerts are not reaching the table"
+    # - and reporting 100% never-fired at 0/100 off an empty table is the most
+    # alarming finding this tool produces. Blindness is never health.
+    $alertProbe = Get-ShcTableState -WorkspaceId $Context.WorkspaceId -TableName 'SecurityAlert' -Timespan $Context.Timespan
+    if ($alertProbe.State -ne 'present') {
+        $headline = if ($alertProbe.State -eq 'missing') {
+            'SecurityAlert table not available - rule firing cannot be measured.'
+        } else {
+            "SecurityAlert recorded no alerts of any kind in $($Context.WindowLabel) - rule firing cannot be measured."
+        }
+        return New-ShcCheckResult -CheckId $checkId -Title $title -Weight $weight `
+            -Score $null -Status 'unknown' `
+            -Headline $headline `
+            -Summary ('With no alerts in the table there is no way to tell a rule that never fired from a ' +
+            'workspace where alerts are not being written at all. Confirm alerts are reaching SecurityAlert, ' +
+            'then re-run.') `
+            -MethodNote "SecurityAlert state: $($alertProbe.State). Excluded from the grade."
+    }
+
     $query = @"
 SecurityAlert
 | where TimeGenerated between (datetime($($Context.KqlStart)) .. datetime($($Context.KqlEnd)))
@@ -48,7 +68,7 @@ SecurityAlert
         if ($firedNames.Contains([string]$rule.properties.displayName)) { continue }
         $lastModified = ''
         if ($rule.properties.PSObject.Properties['lastModifiedUtc'] -and $rule.properties.lastModifiedUtc) {
-            $lastModified = ([datetime]$rule.properties.lastModifiedUtc).ToString('yyyy-MM-dd')
+            $lastModified = (ConvertTo-ShcUtc $rule.properties.lastModifiedUtc).ToString('yyyy-MM-dd')
         }
         $neverFired.Add([pscustomobject]@{
                 RuleName        = $rule.properties.displayName

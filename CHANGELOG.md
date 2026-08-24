@@ -2,6 +2,67 @@
 
 All notable changes to this module. Format loosely follows Keep a Changelog.
 
+## [Unreleased]
+
+### Fixed
+- **Sovereign clouds now work.** The Log Analytics query host and token audience
+  were hardcoded to `api.loganalytics.io`, so in Azure Government
+  (`api.loganalytics.us`) and China (`api.loganalytics.azure.cn`) every KQL-backed
+  check failed at the token request and degraded to "not measurable" - leaving the
+  grade meaningless. Both are now resolved per cloud from the signed-in context via
+  `Get-ShcLogAnalyticsEndpoint`, falling back to the commercial defaults when an
+  older `Az.Accounts` leaves the environment properties blank. ARM calls needed no
+  change: `Invoke-AzRestMethod -Path` already resolves against the context.
+- **Timestamps are normalised to UTC.** `[datetime]'...Z'` yields `Kind=Local`, so
+  any API value that arrived as a string (rather than being auto-converted by the
+  JSON deserializer) was compared against the `Kind=Utc` window end with the host's
+  offset baked in - under-reporting staleness east of UTC and over-reporting west,
+  and rendering dates a day off. All API timestamps now pass through
+  `ConvertTo-ShcUtc`, which honours the offset and is invariant to host time zone
+  and culture. HC-02 also skips `Usage` rows with no parseable timestamp instead of
+  inventing a staleness figure from a blank.
+- **A drifted row shape no longer costs the whole report.** `ConvertTo-ShcHtmlTable`
+  read `$row.$col` directly, which `Set-StrictMode -Version Latest` makes a
+  terminating error - and rendering runs *after* the entire scan, so one check
+  whose findings drifted from its declared `Columns` destroyed a completed run.
+  Missing cells now render empty, and a rendering failure is caught so `-PassThru`
+  still returns the result.
+- **`-OutputPath` is validated before the scan, not after.** A missing directory
+  surfaced only at the final `Set-Content`, throwing away two ARM collections and
+  ~10 KQL queries. The path is now resolved and checked before the first ARM call.
+  `New-ShcReport` also writes with `-LiteralPath` (`-Path` treats `[` and `]` as
+  wildcards and fails on paths containing them), and the default path uses
+  `$PWD.ProviderPath` so it stays correct when the caller is on a non-filesystem
+  provider.
+
+- **HC-02 missed the worst case it existed to catch.** Candidate tables came from
+  the `Usage` table, which only lists tables that have ingested — so a table that
+  has **never** ingested produced no `Usage` row and was never considered. Found on
+  a live workspace: eight Kubernetes rules watching an empty `AKSAudit`, plus rules
+  on `Event` and `NTANetAnalytics`, all graded healthy. Candidates now come from the
+  workspace's full ARM table inventory (`Get-ShcWorkspaceTables`), and a referenced
+  table absent from `Usage` is probed directly. Findings gained an `Issue` column
+  distinguishing `Stale` from `No data` / `Table not found`. On the workspace that
+  surfaced this, the check went from 2 affected rules (8.7%) to 12 (52.2%).
+- **HC-02 no longer counts a table named only in a comment or string literal.**
+  Matching ran against raw query text, so `// AzureActivity is not used here` made
+  a rule "watch" AzureActivity. `Get-ShcQueryTables` strips comments and string
+  literals before matching — this removed a real false positive on the live
+  workspace while raising per-rule coverage from 13/23 to 23/23.
+- **HC-04 had no blindness gate.** With an empty `SecurityAlert` it reported
+  "N of N rules never fired" and scored 0/100 — the most alarming finding the tool
+  produces, derived from a table with no data, unable to distinguish "no rule fired"
+  from "alerts are not reaching the table". It now returns `unknown` and is excluded
+  from the grade, matching HC-01/HC-02/HC-03. Same bug class as commit `885d61d`.
+
+### Added
+- `TESTING.md`: local verification guide, including the time-zone matrix that CI
+  (UTC-only) cannot cover.
+- Regression tests for each fix above, plus `ConvertTo-ShcUtc`,
+  `Get-ShcLogAnalyticsEndpoint` and `Get-ShcQueryTables` unit tests. Suite is 68
+  tests, green in UTC, US Eastern/Pacific, Kolkata (UTC+5:30), Sydney and
+  Kiritimati (UTC+14).
+
 ## [0.3.0-beta] - 2026-07-29
 
 First public beta. Feedback and bug reports welcome — please open an issue.
