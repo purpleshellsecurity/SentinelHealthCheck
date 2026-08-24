@@ -2,7 +2,7 @@
 
 All notable changes to this module. Format loosely follows Keep a Changelog.
 
-## [Unreleased]
+## [0.4.0-beta] - 2026-08-24
 
 ### Fixed
 - **Sovereign clouds now work.** The Log Analytics query host and token audience
