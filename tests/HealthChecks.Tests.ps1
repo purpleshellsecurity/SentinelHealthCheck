@@ -582,11 +582,12 @@ Describe 'Invoke-SentinelHealthCheck orchestration' {
         }
         function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' $null 15 }
         function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' $null 10 }
+        function Test-ShcHealthCoverage { param($Context) $null = $Context; NewStubEnvelope 'HC-08' $null 0 }
 
         $r = Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' -PassThru
         $r.Score | Should -Be 75   # (100*20 + 50*20) / 40; null-score checks excluded
         $r.Grade | Should -Be 'C'
-        @($r.Checks).Count | Should -Be 7
+        @($r.Checks).Count | Should -Be 8
         @($r.Leaderboards.Noisiest).Count | Should -Be 10
         $r.Leaderboards.Noisiest[0].RuleOrIncidentTitle | Should -Be 'N1'
         @($r.Leaderboards.Quietest).Count | Should -Be 1
@@ -615,6 +616,7 @@ Describe 'Invoke-SentinelHealthCheck orchestration' {
         function Test-ShcNoiseLeaders { param($Context) $null = $Context; NewStubEnvelope 'HC-03' $null 15 }
         function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' $null 15 }
         function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' $null 10 }
+        function Test-ShcHealthCoverage { param($Context) $null = $Context; NewStubEnvelope 'HC-08' $null 0 }
 
         $r = Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' -PassThru
         $r.Score | Should -BeNullOrEmpty
@@ -648,6 +650,7 @@ Describe 'Invoke-SentinelHealthCheck orchestration' {
         function Test-ShcNoiseLeaders { param($Context) $null = $Context; NewStubEnvelope 'HC-03' $null 15 }
         function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' $null 15 }
         function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' $null 10 }
+        function Test-ShcHealthCoverage { param($Context) $null = $Context; NewStubEnvelope 'HC-08' $null 0 }
 
         $r = Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' -PassThru -WarningAction SilentlyContinue
         $fallback = $r.Checks | Where-Object CheckId -eq 'HC-04' | Select-Object -First 1
@@ -683,6 +686,7 @@ Describe 'Invoke-SentinelHealthCheck orchestration' {
         function Test-ShcNoiseLeaders { param($Context) $null = $Context; NewStubEnvelope 'HC-03' $null 15 }
         function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' $null 15 }
         function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' $null 10 }
+        function Test-ShcHealthCoverage { param($Context) $null = $Context; NewStubEnvelope 'HC-08' $null 0 }
 
         $out = @(
             [pscustomobject]@{ SubscriptionId = 's'; ResourceGroupName = 'g'; Name = 'w1' }
@@ -822,12 +826,13 @@ Describe 'Invoke-SentinelHealthCheck report path handling' {
         function Test-ShcNoiseLeaders { param($Context) $null = $Context; NewStubEnvelope 'HC-03' 80 10 }
         function Test-ShcAutoClose { param($Context) $null = $Context; NewStubEnvelope 'HC-06' 80 10 }
         function Test-ShcDisabledRules { param($Context) $null = $Context; NewStubEnvelope 'HC-05' 80 10 }
+        function Test-ShcHealthCoverage { param($Context) $null = $Context; NewStubEnvelope 'HC-08' $null 0 }
 
         $r = Invoke-SentinelHealthCheck -SubscriptionId 's' -ResourceGroupName 'g' -WorkspaceName 'w' `
             -OutputPath (Join-Path $TestDrive 'ok.html') -PassThru -WarningAction SilentlyContinue
         $r | Should -Not -BeNullOrEmpty
         $r.Grade | Should -Be 'B'      # every check 80 -> weighted 80
-        @($r.Checks).Count | Should -Be 7
+        @($r.Checks).Count | Should -Be 8
     }
 }
 
@@ -1067,6 +1072,158 @@ Describe 'Get-ShcArmCollection resilience' {
         $r = @(Get-ShcArmCollection -Path '/x' -WarningAction SilentlyContinue)
         $script:calls | Should -Be 1   # second page is the same link, so it stops
         $r.Count | Should -Be 1
+    }
+}
+
+Describe 'Get-ShcHealthTaxonomy' {
+    It 'lists the four documented health resource types' {
+        $t = Get-ShcHealthTaxonomy
+        $t.HealthResourceTypes | Should -HaveCount 4
+        $t.HealthResourceTypes | Should -Contain 'Data connector'
+        $t.HealthResourceTypes | Should -Contain 'Analytics rule'
+        $t.HealthResourceTypes | Should -Contain 'Automation rule'
+        $t.HealthResourceTypes | Should -Contain 'Playbook'
+    }
+    It 'keeps Partial success on automation rules only' {
+        # Statuses are per-operation, not a global set: treating them as global
+        # would stop this check ever reporting drift on a status.
+        $t = Get-ShcHealthTaxonomy
+        ($t.Health | Where-Object OperationName -eq 'Automation rule run').Statuses | Should -Contain 'Partial success'
+        ($t.Health | Where-Object OperationName -eq 'Playbook was triggered').Statuses | Should -Not -Contain 'Partial success'
+    }
+}
+
+Describe 'Test-ShcDocumentedHealthValue' {
+    It 'accepts a documented operation and status pair' {
+        Test-ShcDocumentedHealthValue -Table 'Health' -OperationName 'Scheduled analytics rule run' -Status 'Success' |
+            Should -BeTrue
+    }
+    It 'accepts tenant casing variants (regression)' {
+        # The docs say "Analytics rule"; a live tenant emitted "Analytics Rule".
+        # Casing is not drift, and reporting it as such would bury the real drift.
+        Test-ShcDocumentedHealthValue -Table 'Health' -OperationName 'SCHEDULED ANALYTICS RULE RUN' -Status 'success' |
+            Should -BeTrue
+    }
+    It 'rejects an unknown operation' {
+        Test-ShcDocumentedHealthValue -Table 'Health' -OperationName 'Widget sync' -Status 'Success' |
+            Should -BeFalse
+    }
+    It 'rejects a known operation reporting an undocumented status' {
+        Test-ShcDocumentedHealthValue -Table 'Health' -OperationName 'Playbook was triggered' -Status 'Partial success' |
+            Should -BeFalse
+    }
+    It 'scopes the audit operations to the audit table' {
+        Test-ShcDocumentedHealthValue -Table 'Audit' -OperationName 'Microsoft.SecurityInsights/alertRules/Write' -Status 'Success' |
+            Should -BeTrue
+        Test-ShcDocumentedHealthValue -Table 'Health' -OperationName 'Microsoft.SecurityInsights/alertRules/Write' -Status 'Success' |
+            Should -BeFalse
+    }
+}
+
+Describe 'Test-ShcHealthCoverage (HC-08)' {
+    BeforeAll {
+        function script:NewCensusRow {
+            param($Type, $Operation, $Status, $Reason = '', $Events = 5)
+            [pscustomobject]@{
+                ResourceType = $Type; ResourceKind = ''; Operation = $Operation; Status = $Status
+                Reason = $Reason; Events = $Events
+                FirstSeenUtc = '2026-08-01T00:00:00Z'; LastSeenUtc = '2026-08-30T00:00:00Z'
+            }
+        }
+    }
+    It 'is ungraded and unknown when SentinelHealth is absent' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'missing' }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        $r.Score | Should -BeNullOrEmpty
+        $r.Weight | Should -Be 0
+        $r.Status | Should -Be 'unknown'
+        $r.Headline | Should -Match 'No SentinelHealth table'
+    }
+    It 'censuses the health table and separates documented from undocumented values' {
+        function Get-ShcTableState {
+            param($WorkspaceId, $TableName, $Timespan)
+            $null = $WorkspaceId, $Timespan
+            if ($TableName -eq 'SentinelHealth') { NewTableState 'present' ((Get-Date).ToUniversalTime()) } else { NewTableState 'missing' }
+        }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            if ($Query -match 'bag_keys') { return @() }
+            @(
+                NewCensusRow 'Analytics rule' 'Scheduled analytics rule run' 'Success'
+                NewCensusRow 'Widget'         'Widget sync'                  'Exploded' 'QuotaExceeded'
+            )
+        }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        @($r.Findings).Count | Should -Be 2
+        ($r.Findings | Where-Object Operation -eq 'Scheduled analytics rule run').Documented | Should -Be 'Yes'
+        ($r.Findings | Where-Object Operation -eq 'Widget sync').Documented | Should -Be 'Not in Microsoft docs'
+        @($r.Data.UndocumentedValues).Count | Should -Be 1
+        $r.Data.UndocumentedValues[0].Reason | Should -Be 'QuotaExceeded'
+    }
+    It 'names the documented resource types that reported nothing' {
+        function Get-ShcTableState {
+            param($WorkspaceId, $TableName, $Timespan)
+            $null = $WorkspaceId, $Timespan
+            if ($TableName -eq 'SentinelHealth') { NewTableState 'present' ((Get-Date).ToUniversalTime()) } else { NewTableState 'missing' }
+        }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            if ($Query -match 'bag_keys') { return @() }
+            @(NewCensusRow 'Analytics rule' 'Scheduled analytics rule run' 'Success')
+        }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        $r.Data.MissingResourceTypes | Should -HaveCount 3
+        $r.Headline | Should -Match 'Data connector'
+        $r.Headline | Should -Match 'Playbook'
+    }
+    It 'never contributes to the grade, whatever it finds (regression)' {
+        # HC-09 already scores whether monitoring is on. Scoring this census too
+        # would penalise the same fact twice.
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            if ($Query -match 'bag_keys') { return @() }
+            @(NewCensusRow 'Widget' 'Widget sync' 'Exploded')
+        }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        $r.Score | Should -BeNullOrEmpty
+        $r.Weight | Should -Be 0
+    }
+    It 'still returns the census when the ExtendedProperties probe fails' {
+        # mv-expand is the one query here that can be rejected or throttled on a
+        # large estate; losing it must not cost the caller the rest of the check.
+        function Get-ShcTableState {
+            param($WorkspaceId, $TableName, $Timespan)
+            $null = $WorkspaceId, $Timespan
+            if ($TableName -eq 'SentinelHealth') { NewTableState 'present' ((Get-Date).ToUniversalTime()) } else { NewTableState 'missing' }
+        }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            if ($Query -match 'bag_keys') { throw 'SemanticError: mv-expand rejected' }
+            @(NewCensusRow 'Analytics rule' 'Scheduled analytics rule run' 'Success')
+        }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        @($r.Findings).Count | Should -Be 1
+        @($r.Data.ExtendedPropertyKeys).Count | Should -Be 0
+    }
+    It 'enumerates SentinelAudit as well when it has data' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            if ($Query -match 'bag_keys') { return @() }
+            if ($Query -match '^SentinelAudit') {
+                return @(NewCensusRow 'Analytics rule' 'Microsoft.SecurityInsights/alertRules/Write' 'Success')
+            }
+            @(NewCensusRow 'Analytics rule' 'Scheduled analytics rule run' 'Success')
+        }
+        $r = Test-ShcHealthCoverage -Context (NewStubContext)
+        @($r.Findings | Where-Object Table -eq 'SentinelAudit') | Should -HaveCount 1
+        ($r.Findings | Where-Object Table -eq 'SentinelAudit').Documented | Should -Be 'Yes'
     }
 }
 

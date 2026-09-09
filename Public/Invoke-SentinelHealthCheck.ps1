@@ -5,7 +5,7 @@ function Invoke-SentinelHealthCheck {
         report card. Read-only: two ARM GETs and a handful of KQL queries.
 
     .DESCRIPTION
-        Runs seven mechanical health checks against the workspace:
+        Runs eight mechanical health checks against the workspace:
 
           HC-09  Detection observability enabled          (runs first)
           HC-01  Rules in error or failed state           (needs SentinelHealth)
@@ -14,9 +14,10 @@ function Invoke-SentinelHealthCheck {
           HC-04  Enabled rules that never fired
           HC-05  Disabled rule inventory
           HC-06  Automation rules silently closing incidents
+          HC-08  Health signal coverage and taxonomy      (ungraded, runs last)
 
-        Check IDs follow the HC-## detection-health series (HC-07 and HC-08 are
-        reserved for planned checks). Earlier releases used
+        Check IDs follow the HC-## detection-health series (HC-07, automation and
+        playbook run health, is still reserved). Earlier releases used
         ad hoc IDs: HC-01 was OH-01, HC-02 was LS-04, HC-03 was OH-04, HC-04
         was OH-03, HC-05 was OH-02, HC-06 was OH-06, HC-09 was OH-00.
 
@@ -209,6 +210,9 @@ function Invoke-SentinelHealthCheck {
             'Test-ShcNoiseLeaders'    = @{ Id = 'HC-03'; Title = 'Alert noise and triage discipline' }
             'Test-ShcAutoClose'       = @{ Id = 'HC-06'; Title = 'Automation rules silently closing incidents' }
             'Test-ShcDisabledRules'   = @{ Id = 'HC-05'; Title = 'Disabled rule inventory' }
+            # Last: it grades nothing, and its census reads best after the findings
+            # the graded checks produce.
+            'Test-ShcHealthCoverage'  = @{ Id = 'HC-08'; Title = 'Health signal coverage and taxonomy' }
         }
 
         $checks = foreach ($fn in $checkCatalog.Keys) {

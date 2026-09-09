@@ -2,6 +2,46 @@
 
 All notable changes to this module. Format loosely follows Keep a Changelog.
 
+## [Unreleased]
+
+### Added
+- **HC-08, health signal coverage and taxonomy.** HC-09 answers whether health
+  monitoring is on; HC-01 grades analytics-rule failures. Neither answers the
+  question underneath both: which of the four resource types Microsoft says report
+  health are actually reporting it in this workspace, and what values do they use?
+  A workspace can pass HC-09 while three of the four categories have never emitted
+  an event, because the diagnostic setting only selected some log categories -
+  failures there are invisible and no other check sees it. HC-08 enumerates every
+  distinct (resource type, operation, status, reason) combination in SentinelHealth
+  and SentinelAudit over the scan window, names the documented resource types that
+  reported nothing, and marks any combination absent from Microsoft's published
+  list. Deliberately ungraded (weight 0, null score): a census is an observation,
+  not a judgement, and scoring it would penalise the same fact HC-09 already scores.
+- **`Get-ShcHealthTaxonomy`, the documented value set in one place.** Checks that
+  match on `SentinelResourceType` or `Status` each carried their own tolerant
+  matcher (HC-01's `contains "rule"`), every one an independent guess at a value set
+  written down nowhere. It is written down here now, from
+  `health-table-reference` and `audit-table-reference`. Comparison via
+  `Test-ShcDocumentedHealthValue` is case-insensitive, so the tenant casing variant
+  HC-01 hit in July ("Analytics Rule" against the docs' "Analytics rule") is not
+  reported as drift - only genuinely unlisted values are.
+
+  What the taxonomy deliberately does not cover: `Reason` is typed as an enum whose
+  "possible values depend on the resource type" and Microsoft never publishes the
+  list, and `Description` is free text. Those two carry the actual failure cause, so
+  the only way to learn their value set is to observe it. HC-08 puts its full census
+  in the result's `.Data` (`HealthCensus`, `AuditCensus`, `ExtendedPropertyKeys`,
+  `UndocumentedValues`, `MissingResourceTypes`) for `-PassThru` callers to aggregate
+  across workspaces - which is how that catalogue gets built.
+
+  The `ExtendedProperties` key census collapses to one representative record per
+  (type, operation, status) with `arg_max` before expanding the JSON bag, so it
+  costs roughly ten rows of `mv-expand` rather than the whole window; it reports the
+  keys on the most recent record of each combination, not the union of every key
+  ever seen. That query is also the one most likely to be rejected or throttled on a
+  large estate, so it fails soft - losing the key census does not cost the caller the
+  rest of the check.
+
 ## [0.4.0-beta] - 2026-08-24
 
 ### Fixed
