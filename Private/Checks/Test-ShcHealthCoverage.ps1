@@ -70,11 +70,16 @@ function Test-ShcHealthCoverage {
 
     $window = "datetime($($Context.KqlStart)) .. datetime($($Context.KqlEnd))"
 
+    # Microsoft recommends the pre-built functions over the raw tables so queries
+    # survive schema changes; each falls back to its table where it does not resolve.
+    $healthSource = Get-ShcHealthTableRef -WorkspaceId $Context.WorkspaceId -TableName 'SentinelHealth'
+    $auditSource  = Get-ShcHealthTableRef -WorkspaceId $Context.WorkspaceId -TableName 'SentinelAudit'
+
     # column_ifexists keeps the census working on a tenant whose schema is missing an
     # optional column - a hard reference would fail the whole query with a
     # SemanticError and lose the columns that DO exist.
     $healthQuery = @"
-SentinelHealth
+$healthSource
 | where TimeGenerated between ($window)
 | summarize Events = count(), FirstSeenUtc = min(TimeGenerated), LastSeenUtc = max(TimeGenerated)
     by ResourceType = tostring(column_ifexists("SentinelResourceType", "")),
@@ -127,7 +132,7 @@ SentinelHealth
     $auditProbe = Get-ShcTableState -WorkspaceId $Context.WorkspaceId -TableName 'SentinelAudit' -Timespan $Context.Timespan
     if ($auditProbe.State -eq 'present') {
         $auditQuery = @"
-SentinelAudit
+$auditSource
 | where TimeGenerated between ($window)
 | summarize Events = count(), FirstSeenUtc = min(TimeGenerated), LastSeenUtc = max(TimeGenerated)
     by ResourceType = tostring(column_ifexists("SentinelResourceType", "")),
@@ -168,7 +173,7 @@ SentinelAudit
     $bagRows = @()
     try {
         $bagQuery = @"
-SentinelHealth
+$healthSource
 | where TimeGenerated between ($window)
 | where isnotempty(ExtendedProperties)
 | summarize arg_max(TimeGenerated, ExtendedProperties)
@@ -217,7 +222,7 @@ SentinelHealth
         'reporting nothing usually means its log category was never selected in the diagnostic setting, ' +
         'so failures there are invisible. Informational - this check never affects the grade.') `
         -Findings $findings -Columns @('Table', 'ResourceType', 'Operation', 'Status', 'Reason', 'Events', 'LastSeen', 'Documented') `
-        -MethodNote ('Distinct value census over the scan window. Resource-type coverage is compared against ' +
+        -MethodNote ("Distinct value census over the scan window, read through $healthSource. Resource-type coverage is compared against " +
         'the values documented in health-table-reference and audit-table-reference; comparison is ' +
         'case-insensitive, so tenant casing variants are not reported as drift. Reason and Description ' +
         'have no published value set - that is what the census is for. Ungraded (HC-08).') `

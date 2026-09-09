@@ -27,6 +27,22 @@ function Test-ShcErroringRules {
     $healthProbe = Get-ShcTableState -WorkspaceId $Context.WorkspaceId -TableName 'SentinelHealth' -Timespan $healthTimespan
     $windowEnd = [datetime]$Context.WindowEnd
     $healthFresh = $healthProbe.State -eq 'present' -and ($windowEnd - $healthProbe.LastSeenUtc).TotalHours -le 24
+
+    # The freshness bar rests on "any enabled scheduled rule produces daily health
+    # events". With no enabled Scheduled/NRT rules there is nothing to produce them,
+    # so silence is the expected result rather than evidence monitoring is off -
+    # and telling the operator to go and enable something already enabled sends
+    # them after the wrong problem. HC-05 owns the disabled-rule inventory.
+    $queryRuleCount = @($Context.QueryRules).Count
+    if (-not $healthFresh -and $queryRuleCount -eq 0) {
+        return New-ShcCheckResult -CheckId $checkId -Title $title -Weight $weight `
+            -Score $null -Status 'unknown' `
+            -Headline 'No enabled Scheduled or NRT rules, so there is no rule health to measure.' `
+            -Summary ('This check reads the last run status of each scheduled analytics rule. With none ' +
+            'enabled there is nothing for it to report on. HC-05 covers what is switched off.') `
+            -MethodNote 'No enabled Scheduled/NRT rules in the workspace. Excluded from the grade (HC-01).'
+    }
+
     if (-not $healthFresh) {
         $headline = if ($healthProbe.State -eq 'missing') {
             'Rule health monitoring is not enabled - rule failures are invisible.'
@@ -67,8 +83,12 @@ function Test-ShcErroringRules {
             ForEach-Object { $_.OperationName })
     $opList = ($analyticsOps | ForEach-Object { '"' + $_ + '"' }) -join ', '
 
+    # Microsoft recommends the pre-built function over the raw table so queries
+    # survive schema changes; falls back to the table where it does not resolve.
+    $healthSource = Get-ShcHealthTableRef -WorkspaceId $Context.WorkspaceId -TableName 'SentinelHealth'
+
     $query = @"
-SentinelHealth
+$healthSource
 | where TimeGenerated between (datetime($healthStart) .. datetime($($Context.KqlEnd)))
 | where OperationName in~ ($opList)
 | summarize arg_max(TimeGenerated, Status, Description) by SentinelResourceName
@@ -107,7 +127,7 @@ SentinelHealth
         'the cause in the Detail column, then confirm the next run succeeds.') `
         -Findings $failing -Columns @('RuleName', 'LastStatus', 'LastSeenUtc', 'Detail') `
         -MethodNote ("SentinelHealth, latest status per rule over $healthLookback days to the window end. " +
-        "Rows are selected by the operation names Microsoft documents for analytics rules " +
+        "Read through $healthSource. Rows are selected by the operation names Microsoft documents for analytics rules " +
         "($($analyticsOps -join ', ')), matched case-insensitively; HC-08 reports any operation " +
         "outside that set. Microsoft: monitor-analytics-rule-integrity, health-table-reference (HC-01).")
 }
