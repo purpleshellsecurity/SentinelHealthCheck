@@ -21,6 +21,11 @@ BeforeAll {
     }
     function script:NewStubContext {
         param($QueryRules = @(), $AllRules = @(), $AutomationRules = @(), $EnabledRuleCount = 0)
+        # HC-01 treats "no enabled Scheduled/NRT rules" as nothing to measure, so a
+        # context that claims enabled rules needs at least one query rule to match.
+        if ($EnabledRuleCount -gt 0 -and @($QueryRules).Count -eq 0) {
+            $QueryRules = @(NewStubRule 'StubQueryRule')
+        }
         $w = Get-ShcTimeWindow -LookbackDays 90
         @{
             WorkspaceId = 'x'; LookbackDays = $w.Days
@@ -1238,7 +1243,7 @@ Describe 'Test-ShcHealthCoverage (HC-08)' {
             param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
             $null = $WorkspaceId, $TimespanDays, $Timespan
             if ($Query -match 'bag_keys') { return @() }
-            if ($Query -match '^SentinelAudit') {
+            if ($Query -match '^_?SentinelAudit') {
                 return @(NewCensusRow 'Analytics rule' 'Microsoft.SecurityInsights/alertRules/Write' 'Success')
             }
             @(NewCensusRow 'Analytics rule' 'Scheduled analytics rule run' 'Success')
@@ -1246,6 +1251,72 @@ Describe 'Test-ShcHealthCoverage (HC-08)' {
         $r = Test-ShcHealthCoverage -Context (NewStubContext)
         @($r.Findings | Where-Object Table -eq 'SentinelAudit') | Should -HaveCount 1
         ($r.Findings | Where-Object Table -eq 'SentinelAudit').Documented | Should -Be 'Yes'
+    }
+}
+
+Describe 'Get-ShcHealthTableRef' {
+    BeforeEach { $script:ShcHealthSourceCache = @{} }
+    It 'prefers the pre-built function when the workspace resolves it' {
+        # Microsoft: build queries on _SentinelHealth() / _SentinelAudit() rather
+        # than the tables, so they survive schema changes.
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan; $script:probe = $Query; @()
+        }
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Should -Be '_SentinelHealth()'
+        $script:probe | Should -Match '^_SentinelHealth\(\)'
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelAudit' | Should -Be '_SentinelAudit()'
+    }
+    It 'falls back to the raw table when the function does not resolve' {
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            throw "SemanticError: Failed to resolve function '_SentinelHealth'"
+        }
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Should -Be 'SentinelHealth'
+    }
+    It 'caches the resolved source per workspace and table' {
+        $script:calls = 0
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan; $script:calls++; @()
+        }
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Out-Null
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Out-Null
+        $script:calls | Should -Be 1
+    }
+    It 'does not cache a throttle as "function missing" (regression)' {
+        # A 429 says nothing about whether the function exists. Caching it would
+        # pin the whole scan to the raw table over one transient failure.
+        $script:calls = 0
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $Query, $TimespanDays, $Timespan
+            $script:calls++; throw 'Response status code does not indicate success: 429 (Too Many Requests)'
+        }
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Should -Be 'SentinelHealth'
+        Get-ShcHealthTableRef -WorkspaceId 'w' -TableName 'SentinelHealth' | Should -Be 'SentinelHealth'
+        $script:calls | Should -Be 2
+    }
+}
+
+Describe 'Test-ShcErroringRules with no query rules (HC-01)' {
+    It 'says there is nothing to measure rather than blaming health monitoring' {
+        # The freshness bar rests on "an enabled scheduled rule produces daily
+        # health events". With none enabled, silence is expected - telling the
+        # operator monitoring is off sends them after the wrong problem.
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'missing' }
+        $r = Test-ShcErroringRules -Context (NewStubContext -EnabledRuleCount 0)
+        $r.Score | Should -BeNullOrEmpty
+        $r.Status | Should -Be 'unknown'
+        $r.Headline | Should -Match 'no rule health to measure'
+        $r.Headline | Should -Not -Match 'not enabled'
+    }
+    It 'still blames health monitoring when there ARE query rules' {
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'missing' }
+        $r = Test-ShcErroringRules -Context (NewStubContext -EnabledRuleCount 10)
+        $r.Status | Should -Be 'warning'
+        $r.Headline | Should -Match 'not enabled'
     }
 }
 

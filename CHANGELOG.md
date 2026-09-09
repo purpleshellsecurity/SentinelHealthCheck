@@ -5,6 +5,33 @@ All notable changes to this module. Format loosely follows Keep a Changelog.
 ## [Unreleased]
 
 ### Added
+- **Queries read through Microsoft's compatibility shim.** The health/audit
+  reference says to build queries on the pre-built functions `_SentinelHealth()`
+  and `_SentinelAudit()` rather than the tables directly, because those functions
+  "ensure the maintenance of your queries' backward compatibility in the event of
+  changes being made to the schema of the tables themselves". Every check queried
+  the tables directly. For a module whose value is surviving schema and tenant
+  drift, taking Microsoft's own shim is close to free. `Get-ShcHealthTableRef`
+  resolves the function once per workspace and falls back to the raw table where
+  it does not resolve, so a workspace without it still gets a full scan. A
+  transient failure (a throttle, a transport error) falls back for that call only
+  and is not cached as "function missing".
+
+  Enablement is still judged from the table via `Get-ShcTableState`, not from
+  whether the function resolves: the function is a view over the table, so it
+  resolves in a workspace where monitoring was switched on and later went silent,
+  which makes it a weaker signal than "rows exist".
+
+### Fixed
+- **HC-01 no longer blames health monitoring when there is nothing to monitor.**
+  Its freshness gate rests on "any enabled scheduled rule produces daily health
+  events", so it read silence as monitoring being off. In a workspace with no
+  enabled Scheduled or NRT rules there is nothing to produce those events, and the
+  check told the operator to go and enable something that was already enabled,
+  sending them after the wrong problem. It now reports that there is no rule
+  health to measure and points at HC-05, which owns the disabled-rule inventory.
+
+### Added
 - **HC-08, health signal coverage and taxonomy.** HC-09 answers whether health
   monitoring is on; HC-01 grades analytics-rule failures. Neither answers the
   question underneath both: which of the four resource types Microsoft says report
