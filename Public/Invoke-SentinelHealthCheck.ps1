@@ -2,7 +2,7 @@ function Invoke-SentinelHealthCheck {
     <#
     .SYNOPSIS
         Scans a Microsoft Sentinel workspace for detection rot and writes an HTML
-        report card. Read-only: two ARM GETs and a handful of KQL queries.
+        report card. Read-only: four ARM collections and roughly a dozen KQL queries.
 
     .DESCRIPTION
         Runs eight mechanical health checks against the workspace:
