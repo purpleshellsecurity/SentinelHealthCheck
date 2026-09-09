@@ -316,10 +316,15 @@ Describe 'Test-ShcErroringRules (HC-01)' {
         $r.Status | Should -Be 'warning'   # 1% of enabled rules
         $r.Score | Should -Be 95
     }
-    It 'keeps the tolerant resource-type filter - do not simplify to an exact match' {
-        # Deliberate: SentinelResourceType value variants differ across tenants; an
-        # exact "Analytics Rule" match gives a false clean. This test fails if
-        # someone "cleans up" the filter.
+    It 'selects on every documented analytics-rule operation, case-insensitively' {
+        # Replaces the old tolerant SentinelResourceType matcher. That hedge existed
+        # because an exact match on an undocumented value set gave a silent false
+        # clean; HC-08 now reports operations outside the documented set, so the
+        # precise filter is safe. Two things this pins:
+        #   - the operation list comes from Get-ShcHealthTaxonomy, so adding an
+        #     operation there reaches HC-01 without a second edit here;
+        #   - the match stays case-insensitive (in~), covering the "Analytics Rule"
+        #     casing variant seen on a live tenant.
         function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
         function Invoke-ShcQuery {
             param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
@@ -327,8 +332,25 @@ Describe 'Test-ShcErroringRules (HC-01)' {
             $script:hc01Query = $Query; @()
         }
         $null = Test-ShcErroringRules -Context (NewStubContext -EnabledRuleCount 10)
-        $script:hc01Query | Should -Match 'SentinelResourceType contains "rule"'
-        $script:hc01Query | Should -Match '!contains "automation"'
+
+        $script:hc01Query | Should -Match 'OperationName in~'
+        $documented = (Get-ShcHealthTaxonomy).Health |
+            Where-Object { $_.ResourceType -eq 'Analytics rule' } |
+            ForEach-Object { $_.OperationName }
+        $documented | Should -Not -BeNullOrEmpty
+        foreach ($op in $documented) { $script:hc01Query | Should -BeLike "*`"$op`"*" }
+    }
+    It 'no longer guesses at SentinelResourceType (regression)' {
+        # The old filter hedged against a value set that is now written down.
+        # If it comes back, the taxonomy has stopped being the source of truth.
+        function Get-ShcTableState { param($WorkspaceId, $TableName, $Timespan) $null = $WorkspaceId, $TableName, $Timespan; NewTableState 'present' ((Get-Date).ToUniversalTime()) }
+        function Invoke-ShcQuery {
+            param($WorkspaceId, $Query, [int]$TimespanDays = 90, [string]$Timespan)
+            $null = $WorkspaceId, $TimespanDays, $Timespan
+            $script:hc01Query = $Query; @()
+        }
+        $null = Test-ShcErroringRules -Context (NewStubContext -EnabledRuleCount 10)
+        $script:hc01Query | Should -Not -Match 'SentinelResourceType contains'
     }
 }
 
